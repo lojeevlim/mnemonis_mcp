@@ -4,7 +4,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import { idsOf, type AuditLog } from "../audit.js";
 import { assertActor, MAX_IMPORT_BYTES, SCHEMA_VERSION, type Actor, type Json } from "../domain/index.js";
-import { StoreError } from "../store/fileStore.js";
+import { StoreError } from "../store/types.js";
 import { toErrorInfo } from "../service/errors.js";
 import type { MemoryService } from "../service/memoryService.js";
 import { errorBody } from "./cors.js";

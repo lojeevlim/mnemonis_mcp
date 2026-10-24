@@ -5,7 +5,8 @@ import { createAuditLog } from "./audit.js";
 import { parseAllowedOrigins } from "./http/cors.js";
 import { startHttpServer } from "./http/server.js";
 import { createMemoryService } from "./service/memoryService.js";
-import { FileStore, StoreError } from "./store/fileStore.js";
+import { FileStore } from "./store/fileStore.js";
+import { StoreError } from "./store/types.js";
 
 async function main(): Promise<void> {
   const dir = process.env.MNEMONIS_DATA_DIR || join(homedir(), ".mnemonis");

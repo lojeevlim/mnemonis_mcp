@@ -52,7 +52,7 @@ import {
   type SearchResult,
   type WorkspaceState,
 } from "../domain/index.js";
-import type { FileStore, Snapshot } from "../store/fileStore.js";
+import type { Snapshot, UserStore, WorkspaceStore } from "../store/types.js";
 
 export type Result<T> = Snapshot & { value: T };
 
@@ -65,7 +65,7 @@ export function createSystemContext(): DomainContext {
 }
 
 export interface MemoryServiceOptions {
-  store: FileStore;
+  store: UserStore;
   ctx?: DomainContext;
 }
 
@@ -168,4 +168,9 @@ function defaultProvenance(actor: Actor): RelationProvenance {
   return actor.kind === "user"
     ? { origin: "user", createdBy: actor.name }
     : { origin: "process", createdBy: actor.name, process: actor.name };
+}
+
+/** Per-user services over a multi-user store; each call builds a service bound to that user's workspace. */
+export function createMemoryServices({ store, ctx = createSystemContext() }: { store: WorkspaceStore; ctx?: DomainContext }) {
+  return { forUser: (userId: string): MemoryService => createMemoryService({ store: store.forUser(userId), ctx }) };
 }

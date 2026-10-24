@@ -3,4 +3,5 @@ dist
 data
 *.token
 .env*
+!.env.example
 *.tsbuildinfo

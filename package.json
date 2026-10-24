@@ -15,17 +15,22 @@
     "test": "vitest run",
     "sync-domain": "node scripts/sync-domain.mjs",
     "token": "tsx src/auth/cli.ts",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
     "@hono/node-server": "2.1.5",
     "@modelcontextprotocol/sdk": "1.32.2",
     "hono": "4.13.13",
+    "pg": "8.23.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
     "eslint": "10.13.0",
     "globals": "17.13.0",
     "tsx": "4.23.15",

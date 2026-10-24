@@ -1,5 +1,5 @@
 import { DomainError } from "../domain/index.js";
-import { StoreError } from "../store/fileStore.js";
+import { StoreError } from "../store/types.js";
 
 export interface ErrorInfo {
   code: string;

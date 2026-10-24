@@ -2,29 +2,15 @@ import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, re
 import { join } from "node:path";
 import {
   createEmptyWorkspace,
-  MAX_IMPORT_BYTES,
   migrateWorkspaceState,
   SCHEMA_VERSION,
   type Mutation,
   type WorkspaceState,
 } from "../domain/index.js";
+import { parseImportJson } from "./importJson.js";
+import { StoreError, type Snapshot, type UserStore, type WorkspaceStore } from "./types.js";
 
-export interface Snapshot {
-  rev: number;
-  state: WorkspaceState;
-}
-
-export type StoreErrorCode = "lock_held" | "corrupt" | "missing_with_backup" | "conflict" | "io";
-
-/** Messages never contain file contents; paths only for operator-facing startup errors. */
-export class StoreError extends Error {
-  readonly code: StoreErrorCode;
-  constructor(code: StoreErrorCode, message: string) {
-    super(message);
-    this.name = "StoreError";
-    this.code = code;
-  }
-}
+export { StoreError, type Snapshot, type StoreErrorCode } from "./types.js";
 
 export interface FileStoreOptions {
   dir: string;
@@ -49,7 +35,7 @@ function pidAlive(pid: number): boolean {
  * Single-file workspace store: { schemaVersion, state, rev } in <dir>/workspace.json.
  * One process owns it (lockfile); inside the process every change goes through a promise queue.
  */
-export class FileStore {
+export class FileStore implements UserStore, WorkspaceStore {
   private readonly file: string;
   private readonly tmp: string;
   private readonly bak: string;
@@ -141,6 +127,11 @@ export class FileStore {
     }
   }
 
+  /** Single-workspace store: every user id maps to the same workspace. */
+  forUser(): UserStore {
+    return this;
+  }
+
   /** Latest committed snapshot (waits for queued writes so callers read their own writes). */
   read(): Promise<Snapshot> {
     return this.enqueue(() => this.current);
@@ -165,17 +156,7 @@ export class FileStore {
       if (opts.ifMatchRev !== undefined && opts.ifMatchRev !== this.current.rev) {
         throw new StoreError("conflict", `Revision mismatch (current ${this.current.rev})`);
       }
-      if (json.length > MAX_IMPORT_BYTES) throw new StoreError("corrupt", "Import failed: file is too large");
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(json);
-      } catch {
-        throw new StoreError("corrupt", "Import failed: not valid JSON");
-      }
-      const wrapped = (parsed as { state?: unknown } | null)?.state;
-      const v = migrateWorkspaceState(wrapped ?? parsed);
-      if (!v.ok) throw new StoreError("corrupt", `Import failed: ${v.reason}`);
-      this.commit(v.state);
+      this.commit(parseImportJson(json));
       return this.current;
     });
   }
