@@ -174,3 +174,5 @@ function defaultProvenance(actor: Actor): RelationProvenance {
 export function createMemoryServices({ store, ctx = createSystemContext() }: { store: WorkspaceStore; ctx?: DomainContext }) {
   return { forUser: (userId: string): MemoryService => createMemoryService({ store: store.forUser(userId), ctx }) };
 }
+
+export type MemoryServices = ReturnType<typeof createMemoryServices>;

@@ -1,17 +1,21 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe as baseDescribe, expect, it } from "vitest";
 import { createRateLimiter } from "../src/service/guards.js";
 import { TOOL_NAMES } from "../src/mcp/tools.js";
-import { startTestServer, type TestServer } from "./helpers.js";
+import { startTestServer, TEST_DB_URL, type TestServer, type TestUser } from "./helpers.js";
+
+const describe = baseDescribe.skipIf(!TEST_DB_URL);
 
 let t: TestServer;
 const clients: Client[] = [];
 
-async function connect(server: TestServer, name = "test-agent"): Promise<Client> {
+/** Connects an MCP client with a freshly minted mcp token of `user` (default user A). */
+async function connect(server: TestServer, name = "test-agent", user: TestUser = server.a): Promise<Client> {
   const client = new Client({ name, version: "1.0.0" });
+  const { token } = await user.mcpToken();
   await client.connect(
-    new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`), { requestInit: { headers: server.headers() } }),
+    new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`), { requestInit: { headers: user.mcpHeaders(token) } }),
   );
   clients.push(client);
   return client;
@@ -67,14 +71,15 @@ describe("tool surface", () => {
     expect(tools.find((x) => x.name === "memory_search")?.annotations?.readOnlyHint).toBe(true);
   });
 
-  it("requires the token and a valid Origin", async () => {
+  it("requires an mcp token and a valid Origin", async () => {
+    const { token } = await t.a.mcpToken();
     const bare = new Client({ name: "x", version: "1" });
     await expect(bare.connect(new StreamableHTTPClientTransport(new URL(`${t.url}/mcp`)))).rejects.toThrow();
     const evil = new Client({ name: "x", version: "1" });
     await expect(
       evil.connect(
         new StreamableHTTPClientTransport(new URL(`${t.url}/mcp`), {
-          requestInit: { headers: t.headers({ Origin: "http://evil.test" }) },
+          requestInit: { headers: t.a.mcpHeaders(token, { Origin: "http://evil.test" }) },
         }),
       ),
     ).rejects.toThrow();
@@ -289,21 +294,31 @@ describe("guards over MCP", () => {
     expect((await stateOf()).state.revisions[s.data.revisionId].author).toBe("claude-code");
   });
 
-  it("audits MCP calls without content or tokens", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const c = await connect(t);
+  it("audits MCP calls with the user id, without content or tokens", async () => {
+    const { token } = await t.a.mcpToken();
+    const c = await new Promise<Client>((resolve, reject) => {
+      const client = new Client({ name: "audit-agent", version: "1.0.0" });
+      client
+        .connect(new StreamableHTTPClientTransport(new URL(`${t.url}/mcp`), { requestInit: { headers: t.a.mcpHeaders(token) } }))
+        .then(() => resolve(client), reject);
+      clients.push(client);
+    });
     await call(c, "memory_save", { title: "AUDITSECRET", content: "AUDITBODY" });
-    const audit = readFileSync(join(t.dir, "audit.log"), "utf8");
-    expect(audit).toContain('"via":"mcp"');
-    expect(audit).toContain('"action":"memory_save"');
-    expect(audit).not.toContain("AUDIT");
-    expect(audit).not.toContain(t.token);
+    await t.audit.flush();
+    const rows = (await t.pool.query("SELECT * FROM audit_log WHERE user_id = $1 AND via = 'mcp'", [t.a.id])).rows;
+    expect(rows.at(-1)).toMatchObject({ action: "memory_save", ok: true, client: "audit-agent", actor_kind: null });
+    const dump = JSON.stringify(rows);
+    expect(dump).not.toContain("AUDIT" + "SECRET");
+    expect(dump).not.toContain("AUDITBODY");
+    expect(dump).not.toContain(token);
+    expect((await t.pool.query("SELECT 1 FROM audit_log WHERE user_id = $1", [t.b.id])).rowCount).toBe(0);
   });
 
   it("GET and DELETE on /mcp are 405 (stateless, no SSE sessions)", async () => {
-    expect((await t.api("/mcp")).status).toBe(405);
-    expect((await t.api("/mcp", { method: "DELETE" })).status).toBe(405);
+    const { token } = await t.a.mcpToken();
+    const h = t.a.mcpHeaders(token);
+    expect((await fetch(`${t.url}/mcp`, { headers: h })).status).toBe(405);
+    expect((await fetch(`${t.url}/mcp`, { method: "DELETE", headers: h })).status).toBe(405);
   });
 });
 

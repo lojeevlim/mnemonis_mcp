@@ -49,14 +49,24 @@ export interface RateLimiter {
   take(key: string): void;
 }
 
-/** Sliding-window limiter (default 60 writes / minute / key). */
-export function createRateLimiter(opts: { max?: number; windowMs?: number; now?: () => number } = {}): RateLimiter {
-  const { max = 60, windowMs = 60_000, now = Date.now } = opts;
+/** Sliding-window limiter (default 60 writes / minute / key, at most 10,000 tracked keys). */
+export function createRateLimiter(opts: { max?: number; windowMs?: number; maxKeys?: number; now?: () => number } = {}): RateLimiter {
+  const { max = 60, windowMs = 60_000, maxKeys = 10_000, now = Date.now } = opts;
   const hits = new Map<string, number[]>();
+  /** Drops keys whose newest hit left the window; if still full, evicts the oldest-inserted keys. */
+  const makeRoom = (t: number) => {
+    for (const [k, v] of hits) if (v.length === 0 || t - v[v.length - 1] >= windowMs) hits.delete(k);
+    for (const k of hits.keys()) {
+      if (hits.size < maxKeys) break;
+      hits.delete(k);
+    }
+  };
   return {
     take(key) {
       const t = now();
-      const recent = (hits.get(key) ?? []).filter((h) => t - h < windowMs);
+      const known = hits.get(key);
+      if (!known && hits.size >= maxKeys) makeRoom(t);
+      const recent = (known ?? []).filter((h) => t - h < windowMs);
       if (recent.length >= max) {
         hits.set(key, recent);
         const wait = Math.max(1, Math.ceil((recent[0] + windowMs - t) / 1000));
@@ -90,7 +100,7 @@ export interface AgentWriterOptions {
   /** MCP clientInfo.name (cleaned); never taken from tool input. */
   clientName?: string | null;
   limiter?: RateLimiter;
-  /** Rate-limit bucket (one token => one bucket). */
+  /** Rate-limit bucket (the HTTP layer uses one bucket per user, shared by all of that user's tokens). */
   limitKey?: string;
   maxPending?: number;
 }

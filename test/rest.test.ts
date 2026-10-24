@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe as baseDescribe, expect, it } from "vitest";
 import { MAX_IMPORT_BYTES } from "../src/domain/index.js";
-import { rawRequest, startTestServer, type TestServer } from "./helpers.js";
+import { rawRequest, startTestServer, TEST_DB_URL, type TestServer } from "./helpers.js";
+
+const describe = baseDescribe.skipIf(!TEST_DB_URL);
 
 let t: TestServer;
 beforeEach(async () => {
@@ -19,16 +19,16 @@ const post = (path: string, body: unknown, headers: Record<string, string> = {})
   });
 
 describe("authentication", () => {
-  it("health is public and exposes no data", async () => {
+  it("health is public, exactly {ok:true}, and exposes no data", async () => {
     await t.op("createMemory", { title: "Secret title" });
     const r = await fetch(`${t.url}/api/health`);
     expect(r.status).toBe(200);
     const text = await r.text();
-    expect(JSON.parse(text)).toEqual({ ok: true, schemaVersion: 2, rev: 1 });
+    expect(JSON.parse(text)).toEqual({ ok: true });
     expect(text).not.toContain("Secret");
   });
 
-  it("rejects missing and wrong tokens with 401 (state, export, ops, mcp)", async () => {
+  it("rejects missing and wrong credentials with 401 (state, export, ops, mcp)", async () => {
     for (const [method, path] of [
       ["GET", "/api/state"],
       ["GET", "/api/export"],
@@ -43,15 +43,7 @@ describe("authentication", () => {
     }
   });
 
-  it("a rotated token takes effect immediately", async () => {
-    const { rotateToken } = await import("../src/auth/token.js");
-    const fresh = rotateToken(t.dir);
-    expect((await t.api("/api/state")).status).toBe(401);
-    const ok = await fetch(`${t.url}/api/state`, { headers: { Authorization: `Bearer ${fresh}` } });
-    expect(ok.status).toBe(200);
-  });
-
-  it("the token never appears in any response body or header", async () => {
+  it("the JWT never appears in any response body or header", async () => {
     const responses = [
       await fetch(`${t.url}/api/health`),
       await t.api("/api/state"),
@@ -59,20 +51,24 @@ describe("authentication", () => {
       await t.op("createMemory", { title: "x" }),
       await t.op("nope"),
       await fetch(`${t.url}/api/state`, { headers: { Authorization: "Bearer wrong" } }),
-      await fetch(`${t.url}/api/state`, { headers: { Origin: "http://evil.test", Authorization: `Bearer ${t.token}` } }),
+      await fetch(`${t.url}/api/state`, { headers: { Origin: "http://evil.test", Authorization: `Bearer ${t.a.jwt}` } }),
     ];
     for (const r of responses) {
       const dump = JSON.stringify([...r.headers.entries()]) + (await r.text());
-      expect(dump).not.toContain(t.token);
+      expect(dump).not.toContain(t.a.jwt);
     }
-    const audit = readFileSync(join(t.dir, "audit.log"), "utf8");
-    expect(audit).not.toContain(t.token);
+  });
+
+  it("every /api response is Cache-Control: no-store", async () => {
+    for (const r of [await fetch(`${t.url}/api/health`), await fetch(`${t.url}/api/state`), await t.api("/api/state"), await t.api("/api/me")]) {
+      expect(r.headers.get("cache-control")).toBe("no-store");
+    }
   });
 });
 
 describe("Host and Origin validation", () => {
   it("403 for a forged Host header (DNS rebinding), 200 for localhost forms", async () => {
-    const h = { Authorization: `Bearer ${t.token}` };
+    const h = { Authorization: `Bearer ${t.a.jwt}` };
     expect((await rawRequest(t.port, { path: "/api/health", host: "evil.test", headers: h })).status).toBe(403);
     expect((await rawRequest(t.port, { path: "/api/health", host: "localhost", headers: h })).status).toBe(403); // no port
     expect((await rawRequest(t.port, { path: "/api/health", host: `localhost:${t.port + 1}`, headers: h })).status).toBe(403);
@@ -114,7 +110,7 @@ describe("CORS preflight", () => {
     const r = await preflight(ORIGIN);
     expect(r.status).toBe(204);
     expect(r.headers.get("access-control-allow-origin")).toBe(ORIGIN);
-    expect(r.headers.get("access-control-allow-methods")).toBe("GET, POST, PUT, OPTIONS");
+    expect(r.headers.get("access-control-allow-methods")).toBe("GET, POST, PUT, DELETE, OPTIONS");
     expect(r.headers.get("access-control-allow-headers")).toBe("Authorization, Content-Type, If-Match");
   });
 
@@ -122,6 +118,20 @@ describe("CORS preflight", () => {
     const r = await preflight("http://evil.test");
     expect(r.status).toBe(403);
     expect(r.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("DELETE preflight (token revocation) is answered only for allowed origins", async () => {
+    const del = (origin: string) =>
+      fetch(`${t.url}/api/tokens/x`, {
+        method: "OPTIONS",
+        headers: { Origin: origin, "Access-Control-Request-Method": "DELETE", "Access-Control-Request-Headers": "authorization" },
+      });
+    const ok = await del(ORIGIN);
+    expect(ok.status).toBe(204);
+    expect(ok.headers.get("access-control-allow-methods")).toContain("DELETE");
+    const bad = await del("http://evil.test");
+    expect(bad.status).toBe(403);
+    expect(bad.headers.get("access-control-allow-origin")).toBeNull();
   });
 });
 
@@ -244,7 +254,7 @@ describe("ops", () => {
     expect(body.value.status).toBe("saved");
     const rev = Object.values(body.state.revisions)[0];
     expect(rev.origin).toBe("user");
-    expect(rev.author).toBe("local-user");
+    expect(rev.author).toBe("User A");
   });
 
   it("malformed actors are ignored (run as the server user, never an error, never an upgrade)", async () => {
@@ -293,15 +303,11 @@ describe("ops", () => {
     expect((await t.op("createCollection", { name: "C", actor: { kind: "agent", name: "x" } })).status).toBe(200);
   });
 
-  it("uses MNEMONIS_USER_NAME when configured", async () => {
-    const named = await startTestServer({ userName: "Lojee" });
-    try {
-      const r = await named.op("createMemory", { title: "x" });
-      const body = (await r.json()) as { state: { revisions: Record<string, { author: string }> } };
-      expect(Object.values(body.state.revisions)[0].author).toBe("Lojee");
-    } finally {
-      await named.close();
-    }
+  it("the human actor name is the authenticated user's display name (and differs per user)", async () => {
+    const mine = (await (await t.a.op("createMemory", { title: "x" })).json()) as { state: { revisions: Record<string, { author: string }> } };
+    expect(Object.values(mine.state.revisions)[0].author).toBe("User A");
+    const theirs = (await (await t.b.op("createMemory", { title: "y" })).json()) as { state: { revisions: Record<string, { author: string }> } };
+    expect(Object.values(theirs.state.revisions)[0].author).toBe("User B");
   });
 
   it("rejects unknown keys and bad shapes with 400 (strict schemas)", async () => {
@@ -344,21 +350,25 @@ describe("ops", () => {
     expect(((await r.json()) as { value: { status: string } }).value.status).toBe("saved");
   });
 
-  it("writes an audit log with ids but no content", async () => {
+  const auditRows = async (userId: string) => {
+    await t.audit.flush();
+    return (await t.pool.query("SELECT * FROM audit_log WHERE user_id = $1 ORDER BY id", [userId])).rows;
+  };
+
+  it("writes an audit row with the user id and ids but no content", async () => {
     await t.op("createMemory", { title: "TOPSECRETTITLE", content: "TOPSECRETBODY" });
-    const audit = readFileSync(join(t.dir, "audit.log"), "utf8");
-    const line = JSON.parse(audit.trim().split("\n").pop() as string);
-    expect(line).toMatchObject({ via: "rest", action: "op:createMemory", ok: true, client: "local-user" });
-    expect(line.ids[0]).toMatch(/^mem_/);
-    expect(audit).not.toContain("TOPSECRET");
-    expect(line.actorKind).toBe("user");
+    const rows = await auditRows(t.a.id);
+    expect(rows.at(-1)).toMatchObject({ via: "rest", action: "op:createMemory", ok: true, client: "User A", actor_kind: "user" });
+    expect(rows.at(-1).ids[0]).toMatch(/^mem_/);
+    expect(JSON.stringify(rows)).not.toContain("TOPSECRET");
+    expect(await auditRows(t.b.id)).toEqual([]);
   });
 
   it("audit records the effective actor kind (agent downgrade) and name", async () => {
     await t.op("createMemory", { title: "x", actor: { kind: "agent", name: "memory-health" } });
     await t.op("createMemory", { title: "y", actor: { kind: "user", name: "spoof" } });
-    const lines = readFileSync(join(t.dir, "audit.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(lines.at(-2)).toMatchObject({ actorKind: "agent", client: "memory-health", ok: true });
-    expect(lines.at(-1)).toMatchObject({ actorKind: "user", client: "local-user", ok: true });
+    const rows = await auditRows(t.a.id);
+    expect(rows.at(-2)).toMatchObject({ actor_kind: "agent", client: "memory-health", ok: true });
+    expect(rows.at(-1)).toMatchObject({ actor_kind: "user", client: "User A", ok: true });
   });
 });

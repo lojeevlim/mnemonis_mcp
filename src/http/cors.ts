@@ -22,26 +22,32 @@ export interface GuardOptions {
   allowedOrigins: string[];
   /** The port the server is actually listening on (known only after listen when PORT=0). */
   getPort: () => number;
+  /** Extra exact (case-insensitive) Host header values accepted besides loopback:port (MNEMONIS_ALLOWED_HOSTS). */
+  allowedHosts?: string[];
 }
 
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 
-/** DNS-rebinding defence: only loopback names WITH the server's port are accepted in the Host header. */
-export function hostAllowed(host: string | undefined, port: number): boolean {
+/**
+ * DNS-rebinding defence: loopback names WITH the server's port, plus exact case-insensitive matches of the
+ * configured extra hosts (full Host header values), are accepted. Everything else is refused.
+ */
+export function hostAllowed(host: string | undefined, port: number, extraAllowedHosts: readonly string[] = []): boolean {
   if (!host) return false;
-  return LOOPBACK_HOSTS.some((h) => host.toLowerCase() === `${h}:${port}`);
+  const h = host.toLowerCase();
+  return LOOPBACK_HOSTS.some((l) => h === `${l}:${port}`) || extraAllowedHosts.some((x) => x.toLowerCase() === h);
 }
 
 export function hostGuard(opts: GuardOptions): MiddlewareHandler {
   return async (c, next) => {
-    if (!hostAllowed(c.req.header("host"), opts.getPort())) {
+    if (!hostAllowed(c.req.header("host"), opts.getPort(), opts.allowedHosts)) {
       return deny(c, 403, "forbidden_host", "Host header not allowed");
     }
     await next();
   };
 }
 
-const ALLOW_METHODS = "GET, POST, PUT, OPTIONS";
+const ALLOW_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const ALLOW_HEADERS = "Authorization, Content-Type, If-Match";
 
 /**

@@ -3,53 +3,68 @@ import type { Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { tokenId, verifyToken } from "../auth/token.js";
+import type { AccountService } from "../auth/accounts.js";
+import type { JwtVerifier } from "../auth/jwt.js";
+import type { UserDirectory } from "../auth/users.js";
 import type { AuditLog } from "../audit.js";
 import { createMcpHandler } from "../mcp/server.js";
 import { createRateLimiter, type RateLimiter } from "../service/guards.js";
-import type { MemoryService } from "../service/memoryService.js";
-import { corsGuard, deny, errorBody, hostGuard } from "./cors.js";
+import type { MemoryServices } from "../service/memoryService.js";
+import { createAuthMiddleware, createFailureLimiter, type AppEnv, type FailureLimiter } from "./auth.js";
+import { corsGuard, errorBody, hostGuard } from "./cors.js";
 import { healthBody, MAX_BODY_BYTES, registerRest, tooBig } from "./rest.js";
 
 export interface AppOptions {
-  service: MemoryService;
+  services: MemoryServices;
   audit: AuditLog;
-  /** Current token (read per request so `npm run token -- --rotate` takes effect at once). */
-  getToken: () => string | null;
+  verifier: JwtVerifier;
+  directory: UserDirectory;
+  accounts: AccountService;
   allowedOrigins: string[];
+  /** Extra Host header values accepted besides loopback:port (MNEMONIS_ALLOWED_HOSTS). */
+  allowedHosts?: string[];
+  /** Honour X-Forwarded-For for the pre-auth failure limiter (MNEMONIS_TRUST_PROXY). */
+  trustProxy?: boolean;
   getPort: () => number;
-  userName?: string;
   limiter?: RateLimiter;
+  failureLimiter?: FailureLimiter;
   maxPending?: number;
 }
 
-export function createApp(opts: AppOptions): Hono {
-  const app = new Hono();
-  const guard = { allowedOrigins: opts.allowedOrigins, getPort: opts.getPort };
+export function createApp(opts: AppOptions): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
+  const guard = { allowedOrigins: opts.allowedOrigins, getPort: opts.getPort, allowedHosts: opts.allowedHosts };
   const limiter = opts.limiter ?? createRateLimiter();
+  const authOpts = {
+    verifier: opts.verifier,
+    directory: opts.directory,
+    accounts: opts.accounts,
+    failureLimiter: opts.failureLimiter ?? createFailureLimiter(),
+    trustProxy: opts.trustProxy ?? false,
+  };
 
   app.use("*", hostGuard(guard));
   app.use("*", corsGuard(guard));
   app.use("*", async (c, next) => {
     c.header("X-Content-Type-Options", "nosniff");
-    if (c.req.path === "/api/health") return next();
-    const token = opts.getToken();
-    const m = /^Bearer\s+(\S+)$/i.exec(c.req.header("authorization") ?? "");
-    if (!m || !verifyToken(m[1], token)) {
-      c.header("WWW-Authenticate", 'Bearer realm="mnemonis"');
-      return deny(c, 401, "unauthorized", "Missing or invalid bearer token");
-    }
+    await next();
+  });
+  app.use("/api/*", async (c, next) => {
+    c.header("Cache-Control", "no-store");
     await next();
   });
 
-  app.get("/api/health", async (c) => c.json(healthBody((await opts.service.getState()).rev)));
+  // Public and registered before the auth middleware: no credentials, no database read, no data.
+  app.get("/api/health", (c) => c.json(healthBody()));
 
-  registerRest(app, { service: opts.service, audit: opts.audit, userName: opts.userName });
+  app.use("/api/*", createAuthMiddleware("jwt", authOpts));
+  registerRest(app, { services: opts.services, audit: opts.audit, accounts: opts.accounts });
 
-  const mcp = createMcpHandler({ service: opts.service, audit: opts.audit, limiter, maxPending: opts.maxPending });
+  const mcp = createMcpHandler({ services: opts.services, audit: opts.audit, limiter, maxPending: opts.maxPending });
+  app.use("/mcp", createAuthMiddleware("mcp", authOpts));
   app.all("/mcp", bodyLimit({ maxSize: MAX_BODY_BYTES, onError: tooBig }), (c) => {
-    const token = opts.getToken();
-    return mcp(c, token ? tokenId(token) : "none");
+    const a = c.get("auth");
+    return mcp(c, { userId: a.userId, tokenId: a.tokenId! });
   });
 
   app.notFound((c) => c.json(errorBody("not_found", "Not found"), 404));
@@ -63,7 +78,11 @@ export function createApp(opts: AppOptions): Hono {
 
 export interface RunningServer {
   port: number;
-  close(): Promise<void>;
+  /**
+   * Stops accepting connections, then waits up to `graceMs` for in-flight requests to finish before dropping the
+   * remaining connections. The default (0) drops them immediately.
+   */
+  close(graceMs?: number): Promise<void>;
 }
 
 /** Listens on host:port (port 0 = ephemeral). Rejects on listen errors such as EADDRINUSE. */
@@ -76,10 +95,20 @@ export function startHttpServer(opts: Omit<AppOptions, "getPort"> & { host: stri
       server.off("error", reject);
       resolve({
         port: info.port,
-        close: () =>
+        close: (graceMs = 0) =>
           new Promise<void>((res) => {
-            server.close(() => res());
-            (server as unknown as HttpServer).closeAllConnections?.();
+            const http = server as unknown as HttpServer;
+            let timer: NodeJS.Timeout | undefined;
+            server.close(() => {
+              if (timer) clearTimeout(timer);
+              res();
+            });
+            http.closeIdleConnections?.();
+            if (graceMs <= 0) http.closeAllConnections?.();
+            else {
+              timer = setTimeout(() => http.closeAllConnections?.(), graceMs);
+              timer.unref();
+            }
           }),
       });
     });

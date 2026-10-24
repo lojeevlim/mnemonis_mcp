@@ -47,6 +47,8 @@ const WRITE_NOTE =
 const APPROVAL = " Writes are drafts that wait for the user to approve them in the Mnemonis Inbox; they never take effect immediately.";
 
 export interface ToolDeps {
+  /** The authenticated user every audit record is attributed to. */
+  userId: string;
   service: MemoryService;
   writer: AgentWriter;
   audit: AuditLog;
@@ -134,7 +136,7 @@ const type = z.string().min(1).max(100).describe("e.g. preference, fact, project
 const tags = z.array(z.string().min(1).max(LIMITS.tagLength)).max(LIMITS.tagCount);
 
 export function registerMemoryTools(server: McpServer, deps: ToolDeps): void {
-  const { service, writer, audit } = deps;
+  const { userId, service, writer, audit } = deps;
   const client = writer.actor.name;
 
   /** Runs a tool body: structured errors (isError), audit trail (ids only), no stack traces. */
@@ -143,11 +145,11 @@ export function registerMemoryTools(server: McpServer, deps: ToolDeps): void {
     async (args: A): Promise<CallToolResult> => {
       try {
         const { data, ids } = await body(args);
-        audit.record({ via: "mcp", client, action: name, ids: idsOf(args, ...(ids ?? [])), ok: true });
+        audit.record({ userId, via: "mcp", client, action: name, ids: idsOf(args, ...(ids ?? [])), ok: true });
         return json(data);
       } catch (e) {
         const info = toErrorInfo(e);
-        audit.record({ via: "mcp", client, action: name, ids: idsOf(args), ok: false, code: info.code });
+        audit.record({ userId, via: "mcp", client, action: name, ids: idsOf(args), ok: false, code: info.code });
         return json({ error: info }, true);
       }
     };

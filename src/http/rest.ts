@@ -3,10 +3,12 @@ import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import { idsOf, type AuditLog } from "../audit.js";
-import { assertActor, MAX_IMPORT_BYTES, SCHEMA_VERSION, type Actor, type Json } from "../domain/index.js";
+import { assertActor, MAX_IMPORT_BYTES, type Actor, type Json } from "../domain/index.js";
 import { StoreError } from "../store/types.js";
 import { toErrorInfo } from "../service/errors.js";
-import type { MemoryService } from "../service/memoryService.js";
+import type { MemoryService, MemoryServices } from "../service/memoryService.js";
+import type { AccountService } from "../auth/accounts.js";
+import type { AppEnv } from "./auth.js";
 import { errorBody } from "./cors.js";
 
 /** Ordinary request bodies (ops, MCP). Imports (PUT /api/state) use MAX_IMPORT_BYTES. */
@@ -177,19 +179,86 @@ const cleanName = (n: string): string => {
 };
 
 export interface RestOptions {
-  service: MemoryService;
+  services: MemoryServices;
   audit: AuditLog;
-  /** Name of the human user stamped on REST writes (MNEMONIS_USER_NAME, default "local-user"). */
-  userName?: string;
+  accounts: AccountService;
 }
 
-/** Mounts the authenticated REST API. Auth/Host/Origin are applied by the caller (server.ts). */
-export function registerRest(app: Hono, { service, audit, userName = "local-user" }: RestOptions): void {
-  const user: Actor = { kind: "user", name: cleanName(userName) };
+const tokenBody = z.strictObject({ label: z.string().max(500), expiresInDays: z.number().int().min(1).max(365).optional() });
+const MAX_TOKEN_BODY_BYTES = 16 * 1024;
+
+/**
+ * Mounts the authenticated REST API. Host/Origin/auth are applied by the caller (server.ts): every handler here
+ * runs only with `c.get("auth")` set to a JWT-authenticated user, and takes the user id from it and nowhere else.
+ */
+export function registerRest(app: Hono<AppEnv>, { services, audit, accounts }: RestOptions): void {
   const noStore = (c: Context) => c.header("Cache-Control", "no-store");
+  const who = (c: Context<AppEnv>) => {
+    const a = c.get("auth");
+    const user: Actor = { kind: "user", name: cleanName(a.displayName) };
+    return { userId: a.userId, svc: services.forUser(a.userId), user };
+  };
+
+  app.get("/api/me", async (c) => {
+    const { userId } = who(c);
+    const p = await accounts.profile(userId);
+    if (!p) return c.json(errorBody("not_found", "Not found"), 404);
+    return c.json({ id: p.id, email: p.email, displayName: p.displayName });
+  });
+
+  app.get("/api/tokens", async (c) => {
+    const list = await accounts.listTokens(who(c).userId);
+    return c.json({
+      tokens: list.map((t) => ({
+        id: t.id,
+        label: t.label,
+        prefix: t.prefix,
+        createdAt: t.createdAt,
+        lastUsedAt: t.lastUsedAt,
+        expiresAt: t.expiresAt,
+        revokedAt: t.revokedAt,
+      })),
+    });
+  });
+
+  app.post("/api/tokens", bodyLimit({ maxSize: MAX_TOKEN_BODY_BYTES, onError: tooBig }), async (c) => {
+    const { userId, user } = who(c);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await c.req.text());
+    } catch {
+      return c.json(errorBody("invalid_input", "Request body is not valid JSON"), 400);
+    }
+    const parsed = tokenBody.safeParse(raw);
+    if (!parsed.success) return c.json(errorBody("invalid_input", "Body must be {label: string, expiresInDays?: 1-365}"), 400);
+    const r = await accounts.createToken(userId, parsed.data);
+    if (!r.ok) {
+      // Audited by outcome only: the request body (label) is never recorded.
+      audit.record({ userId, via: "rest", client: user.name, actorKind: "user", action: "token:create", ok: false, code: r.reason === "limit" ? "token_limit_reached" : "invalid_input" });
+      return r.reason === "limit"
+        ? c.json(errorBody("token_limit_reached", "Too many active tokens; revoke one first"), 409)
+        : c.json(errorBody("invalid_input", "Invalid label or expiry"), 400);
+    }
+    // Only the token id is audited: the response body (which carries the one-time plaintext) never reaches the audit.
+    audit.record({ userId, via: "rest", client: user.name, actorKind: "user", action: "token:create", ids: [r.id], ok: true });
+    return c.json(
+      { id: r.id, token: r.token, prefix: r.prefix, label: r.label, createdAt: r.createdAt, expiresAt: r.expiresAt },
+      201,
+    );
+  });
+
+  app.delete("/api/tokens/:id", async (c) => {
+    const { userId, user } = who(c);
+    const id = c.req.param("id");
+    const r = await accounts.revokeToken(userId, id);
+    if (r === "not_found") return c.json(errorBody("not_found", "Not found"), 404);
+    if (r === "revoked") audit.record({ userId, via: "rest", client: user.name, actorKind: "user", action: "token:revoke", ids: [id], ok: true });
+    return c.body(null, 204);
+  });
 
   app.get("/api/state", async (c) => {
-    const snap = await service.getState();
+    const { svc } = who(c);
+    const snap = await svc.getState();
     noStore(c);
     c.header("ETag", etag(snap.rev));
     if (parseRev(c.req.header("if-none-match")) === snap.rev) return c.body(null, 304);
@@ -197,6 +266,7 @@ export function registerRest(app: Hono, { service, audit, userName = "local-user
   });
 
   app.put("/api/state", bodyLimit({ maxSize: MAX_IMPORT_BYTES, onError: tooBig }), async (c) => {
+    const { userId, svc, user } = who(c);
     const header = c.req.header("if-match");
     if (header === undefined) {
       return c.json(errorBody("precondition_required", "If-Match header with the current revision is required"), 428);
@@ -204,16 +274,16 @@ export function registerRest(app: Hono, { service, audit, userName = "local-user
     const rev = parseRev(header);
     if (rev === null) return c.json(errorBody("invalid_input", "If-Match must be a revision number"), 400);
     try {
-      const snap = await service.importJson(await c.req.text(), { ifMatchRev: rev });
-      audit.record({ via: "rest", client: user.name, action: "import", ok: true });
+      const snap = await svc.importJson(await c.req.text(), { ifMatchRev: rev });
+      audit.record({ userId, via: "rest", client: user.name, action: "import", ok: true });
       noStore(c);
       c.header("ETag", etag(snap.rev));
       return c.json({ rev: snap.rev, state: snap.state });
     } catch (e) {
       const info = toErrorInfo(e);
-      audit.record({ via: "rest", client: user.name, action: "import", ok: false, code: info.code });
+      audit.record({ userId, via: "rest", client: user.name, action: "import", ok: false, code: info.code });
       if (e instanceof StoreError && e.code === "conflict") {
-        const current = (await service.getState()).rev;
+        const current = (await svc.getState()).rev;
         c.header("ETag", etag(current));
         return c.json({ error: { code: "conflict", message: e.message }, currentRev: current }, 409);
       }
@@ -222,13 +292,14 @@ export function registerRest(app: Hono, { service, audit, userName = "local-user
   });
 
   app.get("/api/export", async (c) => {
-    const json = await service.exportJson();
+    const json = await who(c).svc.exportJson();
     noStore(c);
     c.header("Content-Disposition", 'attachment; filename="mnemonis-export.json"');
     return c.body(json, 200, { "Content-Type": "application/json; charset=UTF-8" });
   });
 
   app.post("/api/ops/:name", bodyLimit({ maxSize: MAX_BODY_BYTES, onError: tooBig }), async (c) => {
+    const { userId, svc: service, user } = who(c);
     const name = c.req.param("name");
     if (!Object.hasOwn(OPS, name)) return c.json(errorBody("unknown_op", "Unknown operation"), 404);
     const def: Op = OPS[name as OpName];
@@ -256,13 +327,13 @@ export function registerRest(app: Hono, { service, audit, userName = "local-user
     }
     try {
       const r = await def.run(service, parsed.data as never, actor);
-      audit.record({ via: "rest", client: actor.name, actorKind: actor.kind, action: `op:${name}`, ids: idsOf(parsed.data, r.value), ok: true });
+      audit.record({ userId, via: "rest", client: actor.name, actorKind: actor.kind, action: `op:${name}`, ids: idsOf(parsed.data, r.value), ok: true });
       noStore(c);
       c.header("ETag", etag(r.rev));
       return c.json({ rev: r.rev, state: r.state, value: r.value ?? null });
     } catch (e) {
       const info = toErrorInfo(e);
-      audit.record({ via: "rest", client: actor.name, actorKind: actor.kind, action: `op:${name}`, ids: idsOf(parsed.data), ok: false, code: info.code });
+      audit.record({ userId, via: "rest", client: actor.name, actorKind: actor.kind, action: `op:${name}`, ids: idsOf(parsed.data), ok: false, code: info.code });
       return fail(c, e);
     }
   });
@@ -270,6 +341,5 @@ export function registerRest(app: Hono, { service, audit, userName = "local-user
 
 export const tooBig = (c: Context) => c.json(errorBody("too_large", "Request body is too large"), 413);
 
-export function healthBody(rev: number) {
-  return { ok: true, schemaVersion: SCHEMA_VERSION, rev };
-}
+/** Exactly {ok:true}: no revision, no schema version, no database read. */
+export const healthBody = () => ({ ok: true }) as const;
