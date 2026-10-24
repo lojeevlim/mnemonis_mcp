@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { AccountService } from "../auth/accounts.js";
 import type { AuditLog } from "../audit.js";
+import { agentOriginGuard, registerAgentRoutes } from "../agent/routes.js";
 import { createMcpHandler } from "../mcp/server.js";
 import { createRateLimiter, type RateLimiter } from "../service/guards.js";
 import type { MemoryServices } from "../service/memoryService.js";
@@ -31,6 +32,14 @@ export interface AppOptions {
   /** Per-client limiters of the public register / login / config endpoints. */
   authLimiters?: AuthLimiters;
   maxPending?: number;
+  /** Per-user read limiter of /api/agent/* (default 300 per minute). */
+  readLimiter?: RateLimiter;
+  /** Counts failed credential checks on /api/agent/* per client (its own instance). */
+  agentFailureLimiter?: FailureLimiter;
+  /** Limiter of the public GET /api/agent/contract. */
+  contractLimiter?: FailureLimiter;
+  /** The MCP adapter URL published by GET /api/auth/config (null = none). */
+  mcpUrl?: string | null;
 }
 
 export function createApp(opts: AppOptions): Hono<AppEnv> {
@@ -42,6 +51,7 @@ export function createApp(opts: AppOptions): Hono<AppEnv> {
   const mcpFailures = opts.mcpFailureLimiter ?? createFailureLimiter();
 
   app.use("*", hostGuard(guard));
+  app.use("/api/agent/*", agentOriginGuard); // before CORS: the agent surface never answers (or allows) a browser origin
   app.use("*", corsGuard(guard));
   app.use("*", async (c, next) => {
     c.header("X-Content-Type-Options", "nosniff");
@@ -61,6 +71,20 @@ export function createApp(opts: AppOptions): Hono<AppEnv> {
     audit: opts.audit,
     limiters: opts.authLimiters ?? createAuthLimiters(),
     trustProxy: opts.trustProxy ?? false,
+    mcpUrl: opts.mcpUrl ?? null,
+  });
+
+  // Internal agent surface (mn_ tokens only): registered BEFORE the session middleware below.
+  registerAgentRoutes(app, {
+    services: opts.services,
+    audit: opts.audit,
+    accounts: opts.accounts,
+    trustProxy: authOpts.trustProxy,
+    failureLimiter: opts.agentFailureLimiter ?? createFailureLimiter(),
+    contractLimiter: opts.contractLimiter ?? createFailureLimiter({ max: 60, windowMs: 60_000 }),
+    writeLimiter: limiter,
+    readLimiter: opts.readLimiter ?? createRateLimiter({ max: 300, noun: "reads" }),
+    maxPending: opts.maxPending,
   });
 
   app.use("/api/*", createAuthMiddleware("session", { ...authOpts, failureLimiter: apiFailures }));

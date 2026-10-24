@@ -88,6 +88,8 @@ export interface AuthOptions {
   accounts: Pick<AccountService, "verifyMcp" | "verifySession">;
   failureLimiter: FailureLimiter;
   trustProxy: boolean;
+  /** Error code of the 429 sent to a client over its failure budget (default "rate_limited"; /api/agent uses "too_many_failed_attempts"). */
+  limitedCode?: string;
 }
 
 const unauthorized = (c: Context) => {
@@ -111,7 +113,7 @@ export function createAuthMiddleware(kind: "session" | "mcp", o: AuthOptions): M
     const key = clientKey(c, o.trustProxy);
     if (o.failureLimiter.blocked(key)) {
       c.header("Retry-After", "60");
-      return c.json(errorBody("rate_limited", "Too many failed attempts. Try again later."), 429);
+      return c.json(errorBody(o.limitedCode ?? "rate_limited", "Too many failed attempts. Try again later."), 429);
     }
     const refuse = () => {
       o.failureLimiter.fail(key);

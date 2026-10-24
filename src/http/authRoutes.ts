@@ -36,6 +36,8 @@ export interface PublicAuthOptions {
   audit: AuditLog;
   limiters: AuthLimiters;
   trustProxy: boolean;
+  /** Published by GET /api/auth/config so the web app can show the `claude mcp add` command. */
+  mcpUrl: string | null;
 }
 
 const authBody = (r: AuthResult) => ({
@@ -48,7 +50,7 @@ const authBody = (r: AuthResult) => ({
  * Mounts the unauthenticated auth endpoints. They are registered BEFORE the session middleware, each behind its own
  * per-client limiter and a 2 KB body limit. Audit entries record the outcome and an IP bucket, never the email or password.
  */
-export function registerPublicAuth(app: Hono<AppEnv>, { accounts, audit, limiters, trustProxy }: PublicAuthOptions): void {
+export function registerPublicAuth(app: Hono<AppEnv>, { accounts, audit, limiters, trustProxy, mcpUrl }: PublicAuthOptions): void {
   const tooMany = (c: Context) => {
     c.header("Retry-After", "60");
     return c.json(errorBody("rate_limited", "Too many requests. Try again later."), 429);
@@ -83,7 +85,7 @@ export function registerPublicAuth(app: Hono<AppEnv>, { accounts, audit, limiter
     if (limiters.config.blocked(ip)) return tooMany(c);
     limiters.config.fail(ip);
     try {
-      return c.json({ registrationOpen: await accounts.registrationOpen() });
+      return c.json({ registrationOpen: await accounts.registrationOpen(), mcpUrl });
     } catch (e) {
       return accountFailure(c, e);
     }

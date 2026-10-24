@@ -165,7 +165,7 @@ describe("register", () => {
     const r = await register(s, "closed");
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: { code: "registration_closed", message: "Registration is closed" } });
-    expect(await (await fetch(`${s.url}/api/auth/config`)).json()).toEqual({ registrationOpen: false });
+    expect(await (await fetch(`${s.url}/api/auth/config`)).json()).toEqual({ registrationOpen: false, mcpUrl: null });
     expect((await login(s, s.a.email, s.a.password)).status).toBe(200);
   });
 
@@ -186,22 +186,22 @@ describe("register", () => {
     extraPools.push(real);
     // A and B already exist (count 2); room for exactly one more
     const s = await start({ tag, httpPool: usersScopedToTag(real, tag), account: { maxUsers: 3 } });
-    expect(await (await fetch(`${s.url}/api/auth/config`)).json()).toEqual({ registrationOpen: true });
+    expect(await (await fetch(`${s.url}/api/auth/config`)).json()).toEqual({ registrationOpen: true, mcpUrl: null });
     const rs = await Promise.all(Array.from({ length: 5 }, (_, i) => register(s, `cap${i}`)));
     expect(rs.filter((r) => r.status === 201).length).toBe(1);
     expect(rs.filter((r) => r.status === 403).length).toBe(4);
     expect((await s.pool.query("SELECT count(*)::int AS n FROM users WHERE email LIKE $1", [`%@${tag}.example.test`])).rows[0].n).toBe(3);
-    expect(await (await fetch(`${s.url}/api/auth/config`)).json()).toEqual({ registrationOpen: false });
+    expect(await (await fetch(`${s.url}/api/auth/config`)).json()).toEqual({ registrationOpen: false, mcpUrl: null });
     const over = await register(s, "overflow");
     expect(over.status).toBe(403);
     expect(((await over.json()) as { error: { code: string } }).error.code).toBe("registration_closed");
   });
 
-  it("GET /api/auth/config exposes only {registrationOpen} and needs no credentials", async () => {
+  it("GET /api/auth/config exposes only {registrationOpen, mcpUrl} and needs no credentials", async () => {
     const s = await start();
     const r = await fetch(`${s.url}/api/auth/config`);
     expect(r.status).toBe(200);
-    expect(await r.text()).toBe('{"registrationOpen":true}');
+    expect(await r.text()).toBe('{"registrationOpen":true,"mcpUrl":null}');
   });
 
   it("GET /api/health is exactly {ok:true}", async () => {
@@ -678,9 +678,9 @@ describe("rate limits and lockout", () => {
     const capped = await start({ account: { maxUsers: 1 } }); // users A and B of this server already exceed the cap
     const open = await start();
     const bodyOf = async (s: TestServer) => ({ text: await (await fetch(`${s.url}/api/auth/config`)).text() });
-    expect(await bodyOf(closed)).toEqual({ text: '{"registrationOpen":false}' });
+    expect(await bodyOf(closed)).toEqual({ text: '{"registrationOpen":false,"mcpUrl":null}' });
     expect(await bodyOf(capped)).toEqual(await bodyOf(closed));
-    expect(await bodyOf(open)).toEqual({ text: '{"registrationOpen":true}' });
+    expect(await bodyOf(open)).toEqual({ text: '{"registrationOpen":true,"mcpUrl":null}' });
     // and the refusal itself is the same registration_closed
     const r1 = await register(capped, "late");
     const r2 = await register(closed, "late");

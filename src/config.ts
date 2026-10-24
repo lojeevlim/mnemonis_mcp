@@ -24,6 +24,14 @@ export interface Config {
   maxMemories: number;
   /** Concurrent scrypt hashes (each occupies a libuv threadpool thread). */
   hashConcurrency: number;
+  /** Inbox cap: unreviewed agent changes per user (MNEMONIS_MAX_PENDING). */
+  maxPending: number;
+  /** Agent writes per minute per user, shared by all of the user's tokens. */
+  agentWritesPerMinute: number;
+  /** Agent reads per minute per user. */
+  agentReadsPerMinute: number;
+  /** The MCP adapter URL shown to users by GET /api/auth/config (MNEMONIS_MCP_URL), or null. */
+  mcpUrl: string | null;
   host: string;
   port: number;
 }
@@ -49,6 +57,20 @@ const opt = <T extends z.ZodType>(s: T) => z.preprocess(empty, s.optional());
 const bool = z.enum(["true", "false", "1", "0"]);
 const isTrue = (v: string | undefined) => v === "true" || v === "1";
 
+export const DEFAULT_MCP_URL = "http://localhost:8788/mcp";
+
+/** The URL the web app shows in the `claude mcp add` command: https (or http on loopback), path /mcp, no credentials/query/fragment. */
+export function validMcpUrl(v: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return false;
+  }
+  const okScheme = u.protocol === "https:" || (u.protocol === "http:" && isLoopbackHost(u.hostname));
+  return okScheme && u.username === "" && u.password === "" && u.search === "" && u.hash === "" && u.pathname === "/mcp" && !v.includes("?") && !v.includes("#");
+}
+
 const schema = z.object({
   DATABASE_URL: z.string().trim().min(1, "is required"),
   MNEMONIS_ALLOW_REGISTRATION: opt(bool),
@@ -65,6 +87,10 @@ const schema = z.object({
   MNEMONIS_MAX_MEMORIES: z.preprocess(empty, z.coerce.number().int().min(1).max(10_000_000).default(5000)),
   MNEMONIS_HASH_CONCURRENCY: z.preprocess(empty, z.coerce.number().int().min(1).max(16).default(2)),
   MNEMONIS_ALLOW_REMOTE_DB: opt(bool),
+  MNEMONIS_MAX_PENDING: z.preprocess(empty, z.coerce.number().int().min(1).max(100_000).default(200)),
+  MNEMONIS_AGENT_WRITES_PER_MINUTE: z.preprocess(empty, z.coerce.number().int().min(1).max(100_000).default(60)),
+  MNEMONIS_AGENT_READS_PER_MINUTE: z.preprocess(empty, z.coerce.number().int().min(1).max(1_000_000).default(300)),
+  MNEMONIS_MCP_URL: opt(z.string().trim()),
   HOST: z.preprocess(empty, z.string().trim().default("127.0.0.1")),
   PORT: z.preprocess(empty, z.coerce.number().int().min(0).max(65535).default(8787)),
 });
@@ -93,6 +119,9 @@ export function parseConfig(env: Record<string, string | undefined> = process.en
     problems.push("MNEMONIS_SESSION_IDLE_DAYS must not exceed MNEMONIS_SESSION_MAX_DAYS");
   }
 
+  const mcpUrl = e.MNEMONIS_MCP_URL ?? DEFAULT_MCP_URL;
+  if (!validMcpUrl(mcpUrl)) problems.push("MNEMONIS_MCP_URL must be an https URL (or http on localhost) ending in /mcp, without credentials, query or fragment");
+
   const allowedOrigins = list(e.MNEMONIS_ALLOWED_ORIGINS);
   // Registration defaults to open only when the server is reachable from this machine alone.
   const allowRegistration = e.MNEMONIS_ALLOW_REGISTRATION === undefined ? isLoopbackHost(e.HOST) : isTrue(e.MNEMONIS_ALLOW_REGISTRATION);
@@ -117,6 +146,10 @@ export function parseConfig(env: Record<string, string | undefined> = process.en
     maxWorkspaceBytes: e.MNEMONIS_MAX_WORKSPACE_BYTES,
     maxMemories: e.MNEMONIS_MAX_MEMORIES,
     hashConcurrency: e.MNEMONIS_HASH_CONCURRENCY,
+    maxPending: e.MNEMONIS_MAX_PENDING,
+    agentWritesPerMinute: e.MNEMONIS_AGENT_WRITES_PER_MINUTE,
+    agentReadsPerMinute: e.MNEMONIS_AGENT_READS_PER_MINUTE,
+    mcpUrl,
     host: e.HOST,
     port: e.PORT,
   };

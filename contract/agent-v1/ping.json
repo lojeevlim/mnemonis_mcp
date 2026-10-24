@@ -1,0 +1,11 @@
+{
+  "method": "GET",
+  "path": "/api/agent/ping",
+  "response": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "contract": 1
+    }
+  }
+}

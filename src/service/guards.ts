@@ -44,14 +44,25 @@ function assertInboxHasRoom(state: WorkspaceState, cap: number): void {
   }
 }
 
+/** A DomainError "rate_limited" that also says how many seconds to wait (the /api/agent surface sends it as Retry-After). */
+export class RateLimitedError extends DomainError {
+  readonly retryAfter: number;
+  constructor(message: string, retryAfter: number) {
+    super("rate_limited", message);
+    this.retryAfter = retryAfter;
+  }
+}
+
 export interface RateLimiter {
   /** Records one write for `key`; throws DomainError "rate_limited" when over the limit. */
   take(key: string): void;
 }
 
 /** Sliding-window limiter (default 60 writes / minute / key, at most 10,000 tracked keys). */
-export function createRateLimiter(opts: { max?: number; windowMs?: number; maxKeys?: number; now?: () => number } = {}): RateLimiter {
-  const { max = 60, windowMs = 60_000, maxKeys = 10_000, now = Date.now } = opts;
+export function createRateLimiter(
+  opts: { max?: number; windowMs?: number; maxKeys?: number; now?: () => number; noun?: string } = {},
+): RateLimiter {
+  const { noun = "writes", max = 60, windowMs = 60_000, maxKeys = 10_000, now = Date.now } = opts;
   const hits = new Map<string, number[]>();
   /** Drops keys whose newest hit left the window; if still full, evicts the oldest-inserted keys. */
   const makeRoom = (t: number) => {
@@ -70,7 +81,7 @@ export function createRateLimiter(opts: { max?: number; windowMs?: number; maxKe
       if (recent.length >= max) {
         hits.set(key, recent);
         const wait = Math.max(1, Math.ceil((recent[0] + windowMs - t) / 1000));
-        throw new DomainError("rate_limited", `Too many writes (max ${max} per minute). Retry in ${wait}s.`);
+        throw new RateLimitedError(`Too many ${noun} (max ${max} per minute). Retry in ${wait}s.`, wait);
       }
       recent.push(t);
       hits.set(key, recent);

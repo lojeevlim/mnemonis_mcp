@@ -76,6 +76,10 @@ export interface TestServerOptions {
   limiter?: RateLimiter;
   failureLimiter?: FailureLimiter;
   mcpFailureLimiter?: FailureLimiter;
+  agentFailureLimiter?: FailureLimiter;
+  contractLimiter?: FailureLimiter;
+  readLimiter?: RateLimiter;
+  mcpUrl?: string | null;
   authLimiters?: AuthLimiters;
   allowedOrigins?: string[];
   allowedHosts?: string[];
@@ -126,6 +130,10 @@ export async function startTestServer(opts: TestServerOptions = {}): Promise<Tes
     // Every test request comes from 127.0.0.1: keep the per-client limiters out of the way unless a test sets them.
     failureLimiter: opts.failureLimiter ?? noLimit,
     mcpFailureLimiter: opts.mcpFailureLimiter ?? noLimit,
+    agentFailureLimiter: opts.agentFailureLimiter ?? noLimit,
+    contractLimiter: opts.contractLimiter ?? noLimit,
+    readLimiter: opts.readLimiter,
+    mcpUrl: opts.mcpUrl,
     authLimiters: opts.authLimiters ?? { register: noLimit, login: noLimit, config: noLimit },
     maxPending: opts.maxPending,
     host: "127.0.0.1",
@@ -263,5 +271,23 @@ export function usersScopedToTag(real: pg.Pool, tag: string): pg.Pool {
       const v = Reflect.get(t, p) as unknown;
       return typeof v === "function" ? v.bind(t) : v;
     },
+  });
+}
+
+/** Headers every /api/agent/* call needs (contract version + JSON body). */
+export const agentHeaders = (token: string, extra: Record<string, string> = {}): Record<string, string> => ({
+  Authorization: `Bearer ${token}`,
+  "Content-Type": "application/json",
+  "X-Mnemonis-Contract": "1",
+  ...extra,
+});
+
+/** POST /api/agent/memory/<tool> with a valid mn_ token. `tool` is the MCP tool name (memory_save) or the path suffix (save). */
+export function agentPost(url: string, token: string, tool: string, body: unknown, extra: Record<string, string> = {}): Promise<Response> {
+  const suffix = tool.replace(/^memory_/, "");
+  return fetch(`${url}/api/agent/memory/${suffix}`, {
+    method: "POST",
+    headers: agentHeaders(token, extra),
+    body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }

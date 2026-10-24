@@ -7,6 +7,7 @@ import { migrate } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
 import { parseAllowedOrigins } from "./http/cors.js";
 import { startHttpServer } from "./http/server.js";
+import { createRateLimiter } from "./service/guards.js";
 import { createMemoryServices } from "./service/memoryService.js";
 import { shutdown } from "./shutdown.js";
 import { PgStore } from "./store/pgStore.js";
@@ -32,6 +33,10 @@ async function main(): Promise<void> {
       allowedOrigins: parseAllowedOrigins(cfg.allowedOrigins.join(",")),
       allowedHosts: cfg.allowedHosts,
       trustProxy: cfg.trustProxy,
+      limiter: createRateLimiter({ max: cfg.agentWritesPerMinute }),
+      readLimiter: createRateLimiter({ max: cfg.agentReadsPerMinute, noun: "reads" }),
+      maxPending: cfg.maxPending,
+      mcpUrl: cfg.mcpUrl,
       host: cfg.host,
       port: cfg.port,
     });
