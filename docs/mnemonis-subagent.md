@@ -1,6 +1,6 @@
 # Optional: a Mnemonis subagent for Claude Code
 
-A dedicated subagent keeps memory work in its own context and limits it to the Mnemonis tools. Save the following as `.claude/agents/mnemonis.md` (project) or `~/.claude/agents/mnemonis.md` (all projects). It requires the server to be registered as `mnemonis` (see [claude-code-setup.md](claude-code-setup.md)).
+A dedicated subagent keeps memory work in its own context and limits it to the Mnemonis tools. Save the following as `.claude/agents/mnemonis.md` (project) or `~/.claude/agents/mnemonis.md` (all projects). It requires the MCP adapter to be registered as `mnemonis` (see [claude-code-setup.md](claude-code-setup.md)).
 
 ```markdown
 ---
@@ -24,4 +24,4 @@ You manage the user's long-term memory through the Mnemonis tools. Follow these 
 Notes:
 
 - The `tools` list is an allowlist: the subagent cannot use Bash, file tools or anything else.
-- Because the server enforces pending-only writes, the subagent cannot bypass approval even if its instructions are ignored.
+- Because the API enforces pending-only writes, the subagent cannot bypass approval even if its instructions are ignored.

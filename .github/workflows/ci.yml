@@ -1,0 +1,78 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  # The vendored contract/agent-v1 must equal the API's current one (needs the API repo; set the secret/variable for a private repo).
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mnemonis_mcp
+      - uses: actions/checkout@v4
+        with:
+          repository: lojeevlim/mnemonis_api
+          path: mnemonis_api
+          token: ${{ secrets.API_REPO_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/sync-contract.mjs --check
+        working-directory: mnemonis_mcp
+
+  # Opt-in end-to-end suite against a real API + Postgres (manual run).
+  e2e:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mnemonis
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: mnemonis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mnemonis -d mnemonis"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mnemonis_mcp
+      - uses: actions/checkout@v4
+        with:
+          repository: lojeevlim/mnemonis_api
+          path: mnemonis_api
+          token: ${{ secrets.API_REPO_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm run build
+        working-directory: mnemonis_api
+      - run: npm ci
+        working-directory: mnemonis_mcp
+      - name: start the API
+        working-directory: mnemonis_api
+        run: |
+          DATABASE_URL=postgres://mnemonis:ci-only-password@localhost:5432/mnemonis MNEMONIS_AUTO_MIGRATE=1 PORT=8787 node dist/index.js &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8787/api/health && break; sleep 1; done
+      - run: E2E=1 E2E_API_URL=http://127.0.0.1:8787 npm run e2e
+        working-directory: mnemonis_mcp

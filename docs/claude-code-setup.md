@@ -1,10 +1,12 @@
 # Connect Claude Code to Mnemonis
 
-1. Start the server (`npm run dev`), register or sign in (in the Mnemonis web app, or `POST /api/auth/register` / `POST /api/auth/login`, see the README), then create an MCP token: use the web app's MCP Connections page, or `POST /api/tokens` with your login session (`curl -X POST http://localhost:8787/api/tokens -H "Authorization: Bearer <session ms_...>" -H "Content-Type: application/json" -d '{"label":"claude-code"}'`). The `mn_...` token in the response is shown only once. Each token belongs to your account and reaches only your memories.
-2. Register the server (verified against `claude mcp add --help`):
+Mnemonis is three projects. Claude Code talks to the **MCP adapter** (this project, port **8788**); the adapter forwards your token to the **Mnemonis API** (`mnemonis_api`, port **8787**), which owns the accounts, the database and every rule. Tokens are created in the **web app** (`mnemonis`, port 5173), never in this project.
+
+1. Start the three projects (see the README: API, then this adapter, then the web app), register or sign in in the web app, open **MCP Connections** and create a token. The `mn_...` token is shown only once. Each token belongs to your account and reaches only your memories. (Without the web app: `POST /api/auth/register` or `/api/auth/login` on the API, then `POST /api/tokens` with the `ms_` session you get back, see the `mnemonis_api` README.)
+2. Register the adapter (verified against `claude mcp add --help`):
 
 ```bash
-claude mcp add --transport http mnemonis http://localhost:8787/mcp --header "Authorization: Bearer mn_..."
+claude mcp add --transport http mnemonis http://localhost:8788/mcp --header "Authorization: Bearer mn_..."
 ```
 
 Syntax notes from `claude mcp add --help`:
@@ -12,7 +14,7 @@ Syntax notes from `claude mcp add --help`:
 - Usage is `claude mcp add [options] <name> <commandOrUrl> [args...]`; `--transport` (`-t`) is `stdio`, `sse` or `http` (default `stdio`).
 - `--header` (`-H`) takes one or more values and is variadic, so put `<name>` and `<url>` **before** it, as above.
 - `--scope` (`-s`) is `local` (default), `user` or `project`. Use `--scope user` to make it available in all your projects. Avoid `project` (it writes the token into a shared `.mcp.json`).
-- Change the port in the URL if you set `PORT`.
+- Change the port in the URL if you set `MCP_PORT`. The URL is exactly what the web app shows on its MCP Connections page (the API publishes it as `mcpUrl`, from `MNEMONIS_MCP_URL`).
 
 3. Check it: run `claude mcp list` (it should show `mnemonis` connected) or `/mcp` inside Claude Code.
 
@@ -26,16 +28,19 @@ Tools appear as `mcp__mnemonis__memory_search`, `mcp__mnemonis__memory_save`, an
 
 ## Rotating or revoking a token
 
-Create a new token with `POST /api/tokens`, then revoke the old one with `DELETE /api/tokens/<id>` (list ids with `GET /api/tokens`); a revoked token stops working on the next request.
+Create a new token in the web app, then revoke the old one there (or with `DELETE /api/tokens/<id>` on the API); a revoked token stops working on the next request, for every MCP method.
 
 ```bash
 claude mcp remove mnemonis
-claude mcp add --transport http mnemonis http://localhost:8787/mcp --header "Authorization: Bearer mn_<new token>"
+claude mcp add --transport http mnemonis http://localhost:8788/mcp --header "Authorization: Bearer mn_<new token>"
 ```
 
 ## Troubleshooting
 
-- `401`: unknown, revoked or expired token, or a login session (`ms_...`) used instead of an `mn_` token. Create a new token and re-add.
-- `503`: the database is unavailable.
-- `403 Host/Origin`: only `localhost`, `127.0.0.1` or `[::1]` with the server port are accepted as Host, plus anything in `MNEMONIS_ALLOWED_HOSTS`.
-- Port in use: set `PORT` and use the same port in the URL.
+- `401` on connect: unknown, revoked or expired token, or a login session (`ms_...`) used instead of an `mn_` token. Create a new token and re-add.
+- `429`: too many failed attempts from your address; wait for `Retry-After` seconds.
+- `503` `contract_mismatch`: the adapter and the API speak different agent-API contracts; update the older of the two.
+- `503` `upstream_unavailable` (or `/healthz` is 503): the adapter cannot reach the API at `MNEMONIS_API_URL`, or the API's database is down.
+- Tool error `Mnemonis server configuration problem`: the API refused the adapter itself (wrong Host: add the adapter's `host:port` to the API's `MNEMONIS_ALLOWED_HOSTS`). The adapter's log has the request id.
+- `403` `forbidden_host` from the adapter: only `localhost`, `127.0.0.1` or `[::1]` with the adapter's port are accepted as Host, plus anything in `MNEMONIS_ALLOWED_HOSTS` (adapter setting).
+- Port in use: set `MCP_PORT` and use the same port in the URL.

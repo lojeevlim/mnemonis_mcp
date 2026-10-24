@@ -8,6 +8,5 @@
     "rootDir": "src",
     "sourceMap": true
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/domain/testUtils.ts", "src/domain/__fixtures__"]
+  "include": ["src"]
 }

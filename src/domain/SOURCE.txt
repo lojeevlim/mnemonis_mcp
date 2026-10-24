@@ -1,7 +1,0 @@
-Vendored from the mnemonis web repo (src/domain). Do not edit by hand; run `npm run sync-domain`.
-commit: 27398b5952c360b273aa93e2516a407818db2360
-domainDirty: dirty
-repoDirty: dirty
-contentSha256: 182bac82a6a1496288de0f03ccaec93a57712534f902491ac6656be8e09b75ec
-files: 27
-SCHEMA_VERSION: 2
