@@ -1,12 +1,11 @@
 import { request } from "node:http";
 import pg from "pg";
-import { SignJWT } from "jose";
 import { afterEach, beforeEach, describe as baseDescribe, expect, it, vi } from "vitest";
 import { createPgAudit } from "../src/audit.js";
 import { hashToken, TOKEN_RE } from "../src/auth/apiTokens.js";
+import { createSession } from "../src/auth/sessions.js";
 import { createFailureLimiter } from "../src/http/auth.js";
 import { rawRequest, startTestServer, TEST_DB_URL, type TestServer } from "./helpers.js";
-import { ISSUER, unsignedToken } from "./jwtFixtures.js";
 
 const describe = baseDescribe.skipIf(!TEST_DB_URL);
 
@@ -39,32 +38,30 @@ async function shape(r: Response) {
 const UNAUTH = { error: { code: "unauthorized", message: "Missing or invalid credentials" } };
 
 describe("identical 401 for every credential refusal", () => {
-  it("covers JWT failures: missing, garbage, expired, wrong iss/aud, alg none, HS256 confusion, tampered, unknown user", async () => {
-    const good = { sub: t.a.sub, email: t.a.email, email_verified: true };
-    const hs = await new SignJWT({ ...good, role: "authenticated" })
-      .setProtectedHeader({ alg: "HS256", kid: t.key.kid })
-      .setIssuer(ISSUER)
-      .setAudience("authenticated")
-      .setSubject(t.a.sub)
-      .setExpirationTime("5m")
-      .sign(new TextEncoder().encode(JSON.stringify(t.key.publicJwk)));
-    const [h, p, s] = t.a.jwt.split(".");
-    const tamperedPayload = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(p!, "base64url").toString()), sub: t.b.sub })).toString("base64url");
+  it("covers session failures: missing, garbage, wrong shape, expired, revoked, idle, tampered, unknown", async () => {
+    const mk = async () => (await createSession(t.pool, t.a.id, { idleDays: 7, maxDays: 30 }, "x"))!;
+    const revoked = await mk();
+    await t.pool.query("UPDATE sessions SET revoked_at = now() WHERE id = $1", [revoked.id]);
+    const expired = await mk();
+    await t.pool.query("UPDATE sessions SET expires_at = now() - interval '1 minute' WHERE id = $1", [expired.id]);
+    const idle = await mk();
+    await t.pool.query("UPDATE sessions SET last_seen_at = now() - interval '8 days' WHERE id = $1", [idle.id]);
+    const unknown = `ms_${"A".repeat(43)}`;
     const creds: Record<string, string | undefined> = {
       missing: undefined,
       garbage: "Bearer nope",
       basic: "Basic dXNlcjpwdw==",
-      lowercaseScheme: `bearer ${t.a.jwt}`,
-      doubleSpace: `Bearer  ${t.a.jwt}`,
-      expired: `Bearer ${await t.sign(good, { exp: -100 })}`,
-      wrongIssuer: `Bearer ${await t.sign(good, { issuer: "https://evil.example/auth/v1" })}`,
-      wrongAudience: `Bearer ${await t.sign(good, { audience: "other" })}`,
-      algNone: `Bearer ${unsignedToken(good, t.key.kid)}`,
-      hs256: `Bearer ${hs}`,
-      tamperedPayload: `Bearer ${h}.${tamperedPayload}.${s}`,
-      badSignature: `Bearer ${h}.${p}.${s!.slice(0, -4)}AAAA`,
-      unknownUserClosed: `Bearer ${await t.sign({ sub: `${t.tag}-ghost`, email: `ghost@${t.tag}.example.test`, email_verified: true })}`,
-      oversized: `Bearer ${"a".repeat(9000)}.b.c`,
+      doubleSpace: `Bearer  ${t.a.session}`,
+      unknown: `Bearer ${unknown}`,
+      revoked: `Bearer ${revoked.token}`,
+      expired: `Bearer ${expired.token}`,
+      idleExpired: `Bearer ${idle.token}`,
+      tamperedLast: `Bearer ${t.a.session.slice(0, -1)}${t.a.session.endsWith("A") ? "B" : "A"}`,
+      tooShort: `Bearer ${unknown.slice(0, -1)}`,
+      tooLong: `Bearer ${unknown}A`,
+      badChars: `Bearer ms_${"!".repeat(43)}`,
+      oversized: `Bearer ${"a".repeat(9000)}`,
+      sessionLookalike: "Bearer aaaa.bbbb.cccc",
     };
     const baseline = await shape(await fetch(`${t.url}/api/state`));
     expect(baseline.status).toBe(401);
@@ -81,6 +78,7 @@ describe("identical 401 for every credential refusal", () => {
   it("a disabled user is refused on both doors with the same 401", async () => {
     const { token } = await t.a.mcpToken();
     const baseline = await shape(await fetch(`${t.url}/api/state`));
+    expect((await t.a.api("/api/state")).status).toBe(200);
     await t.pool.query("UPDATE users SET disabled_at = now() WHERE id = $1", [t.a.id]);
     expect(await shape(await t.a.api("/api/state"))).toEqual(baseline);
     expect(await shape(await mcpPost(t, t.a.mcpHeaders(token)))).toEqual(await shape(await mcpPost(t, {})));
@@ -105,7 +103,7 @@ describe("identical 401 for every credential refusal", () => {
       tooShort: unknown.slice(0, -1),
       tooLong: `${unknown}A`,
       badChars: `mn_${"!".repeat(43)}`,
-      jwt: t.a.jwt,
+      session: t.a.session,
     })) {
       expect({ name, ...(await shape(await mcpPost(t, { Authorization: `Bearer ${cred}` }))) }, name).toEqual({ name, ...baseline });
     }
@@ -116,7 +114,7 @@ describe("identical 401 for every credential refusal", () => {
     const s = await start({ accounts: (real) => ({ ...real, verifyMcp: (tok) => (calls++, real.verifyMcp(tok)) }) });
     await mcpPost(s, { Authorization: `Bearer mn_${"A".repeat(42)}` });
     await mcpPost(s, { Authorization: `Bearer mn_${"A".repeat(44)}` });
-    await mcpPost(s, { Authorization: `Bearer ${s.a.jwt}` });
+    await mcpPost(s, { Authorization: `Bearer ${s.a.session}` });
     expect(calls).toBe(0);
     await mcpPost(s, { Authorization: `Bearer mn_${"A".repeat(43)}` });
     expect(calls).toBe(1);
@@ -127,7 +125,7 @@ describe("identical 401 for every credential refusal", () => {
       const req = request({ host: "127.0.0.1", port: t.port, path: "/api/state", method: "GET", setHost: false }, (res) => resolve(res.statusCode ?? 0));
       req.on("error", reject);
       req.setHeader("Host", `127.0.0.1:${t.port}`);
-      req.setHeader("Authorization", [`Bearer ${t.a.jwt}`, `Bearer ${t.b.jwt}`]);
+      req.setHeader("Authorization", [`Bearer ${t.a.session}`, `Bearer ${t.b.session}`]);
       req.end();
     });
     expect(dup).toBe(401);
@@ -135,7 +133,7 @@ describe("identical 401 for every credential refusal", () => {
 });
 
 describe("credential kind separation", () => {
-  it("an mcp token is refused on every REST route, a JWT is refused on /mcp", async () => {
+  it("an mcp token is refused on every REST route, a session is refused on /mcp", async () => {
     const { token } = await t.a.mcpToken();
     const h = { Authorization: `Bearer ${token}` };
     const baseline = await shape(await fetch(`${t.url}/api/state`));
@@ -143,6 +141,10 @@ describe("credential kind separation", () => {
       ["GET", "/api/state"],
       ["GET", "/api/export"],
       ["GET", "/api/me"],
+      ["GET", "/api/auth/me"],
+      ["POST", "/api/auth/logout"],
+      ["POST", "/api/auth/password", JSON.stringify({ currentPassword: t.a.password, newPassword: "another-long-passphrase-9" })],
+      ["DELETE", "/api/auth/me", JSON.stringify({ password: t.a.password })],
       ["GET", "/api/tokens"],
       ["POST", "/api/tokens", JSON.stringify({ label: "mint" })],
       ["DELETE", "/api/tokens/00000000-0000-4000-8000-000000000000"],
@@ -153,7 +155,7 @@ describe("credential kind separation", () => {
       const r = await fetch(`${t.url}${path}`, { method, headers: { ...json, ...h }, body });
       expect(await shape(r), `${method} ${path}`).toEqual(baseline);
     }
-    expect((await mcpPost(t, { Authorization: `Bearer ${t.a.jwt}` })).status).toBe(401);
+    expect((await mcpPost(t, { Authorization: `Bearer ${t.a.session}` })).status).toBe(401);
     expect((await mcpPost(t, h)).status).toBe(200);
     // nothing was minted by the refused attempt
     const list = (await (await t.a.api("/api/tokens")).json()) as { tokens: { label: string }[] };
@@ -228,9 +230,12 @@ describe("token lifecycle", () => {
     expect(Date.parse(dated.expiresAt) - Date.now()).toBeLessThan(86_500_000);
   });
 
-  it("GET /api/me returns the stored profile", async () => {
-    const me = await t.a.api("/api/me");
-    expect(await me.json()).toEqual({ id: t.a.id, email: t.a.email, displayName: "User A" });
+  it("GET /api/me and /api/auth/me return the stored profile and the session expiry", async () => {
+    for (const path of ["/api/me", "/api/auth/me"]) {
+      const me = (await (await t.a.api(path)).json()) as { id: string; email: string; displayName: string; session: { expiresAt: string } };
+      expect(me).toMatchObject({ id: t.a.id, email: t.a.email, displayName: "User A" });
+      expect(Date.parse(me.session.expiresAt)).toBeGreaterThan(Date.now() + 6 * 86_400_000);
+    }
   });
 
   it("audits token create/revoke by id only (never the token, label or response body)", async () => {
@@ -242,60 +247,6 @@ describe("token lifecycle", () => {
     const dump = JSON.stringify(rows);
     expect(dump).not.toContain(token);
     expect(dump).not.toContain("LABELSECRET");
-  });
-});
-
-describe("provisioning over HTTP", () => {
-  const claims = (s: TestServer, n: string, extra: Record<string, unknown> = {}) => ({
-    sub: `${s.tag}-${n}`,
-    email: `${n}-${s.tag}@${s.tag}.example.test`,
-    email_verified: true,
-    ...extra,
-  });
-  const get = async (s: TestServer, c: Record<string, unknown>, path = "/api/state") =>
-    fetch(`${s.url}${path}`, { headers: { Authorization: `Bearer ${await s.sign(c)}` } });
-  const count = async (s: TestServer, sub: string) => {
-    const u = await s.pool.query("SELECT id FROM users WHERE auth_subject = $1", [sub]);
-    const w = u.rows[0] ? await s.pool.query("SELECT 1 FROM workspaces WHERE user_id = $1", [u.rows[0].id]) : { rowCount: 0 };
-    return { users: u.rowCount, workspaces: w.rowCount };
-  };
-
-  it("open mode: the first login creates the user and workspace, with the claimed name", async () => {
-    const s = await start({ signupMode: "open" });
-    const c = claims(s, "new1", { user_metadata: { full_name: "New One" } });
-    expect((await get(s, c)).status).toBe(200);
-    expect(await count(s, c.sub)).toEqual({ users: 1, workspaces: 1 });
-    expect(await (await get(s, c, "/api/me")).json()).toMatchObject({ email: c.email, displayName: "New One" });
-  });
-
-  it("concurrent first requests create exactly one user and workspace", async () => {
-    const s = await start({ signupMode: "open" });
-    const c = claims(s, "race");
-    const rs = await Promise.all(Array.from({ length: 8 }, () => get(s, c)));
-    expect(rs.map((r) => r.status)).toEqual(Array(8).fill(200));
-    expect(await count(s, c.sub)).toEqual({ users: 1, workspaces: 1 });
-  });
-
-  it("closed mode refuses unknown users", async () => {
-    const s = await start({ signupMode: "closed" });
-    const c = claims(s, "nobody");
-    expect((await get(s, c)).status).toBe(401);
-    expect(await count(s, c.sub)).toEqual({ users: 0, workspaces: 0 });
-  });
-
-  it("allowlist admits only listed, verified emails (exact and @domain) and refuses the rest with the same 401", async () => {
-    const dom = `allow-${Math.random().toString(36).slice(2, 10)}.example.test`;
-    const s = await start({ signupMode: "allowlist", allowedEmails: [`exact-${dom.slice(6, 14)}@else.example.test`, `@${dom}`] });
-    const byDomain = { sub: `${s.tag}-dom`, email: `dom@${dom}`, email_verified: true };
-    const unverified = { sub: `${s.tag}-unv`, email: `unv@${dom}`, email_verified: false };
-    const stranger = { sub: `${s.tag}-str`, email: `str@${s.tag}.example.test`, email_verified: true };
-    const baseline = await shape(await fetch(`${s.url}/api/state`));
-    expect((await get(s, byDomain)).status).toBe(200);
-    expect(await shape(await get(s, unverified))).toEqual(baseline);
-    expect(await shape(await get(s, stranger))).toEqual(baseline);
-    expect(await count(s, unverified.sub)).toEqual({ users: 0, workspaces: 0 });
-    expect(await count(s, stranger.sub)).toEqual({ users: 0, workspaces: 0 });
-    await s.pool.query("DELETE FROM users WHERE email = $1", [byDomain.email]); // outside the tag's own email suffix
   });
 });
 
@@ -324,8 +275,27 @@ describe("Host allowlist, failure limiter and infrastructure errors", () => {
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get("retry-after")).toBe("60");
     expect((await s.a.api("/api/state")).status).toBe(429);
-    expect((await mcpPost(s, {})).status).toBe(429);
     expect((await fetch(`${s.url}/api/health`)).status).toBe(200); // health is outside the auth path
+    // /mcp has its own limiter instance: failures on /api never lock out /mcp (and vice versa)
+    expect((await mcpPost(s, {})).status).toBe(401);
+  });
+
+  it("the /mcp failure limiter is separate from the /api one", async () => {
+    const s = await start({ mcpFailureLimiter: createFailureLimiter({ max: 2 }), failureLimiter: createFailureLimiter({ max: 50 }) });
+    for (let i = 0; i < 2; i++) expect((await mcpPost(s, {})).status).toBe(401);
+    expect((await mcpPost(s, {})).status).toBe(429);
+    expect((await fetch(`${s.url}/api/state`)).status).toBe(401); // /api still answers normally
+    expect((await s.a.api("/api/state")).status).toBe(200);
+  });
+
+  it("accepts the Bearer scheme case-insensitively on both surfaces", async () => {
+    const s = await start();
+    for (const scheme of ["bearer", "BEARER", "BeArEr"]) {
+      expect((await fetch(`${s.url}/api/state`, { headers: { Authorization: `${scheme} ${s.a.session}` } })).status, scheme).toBe(200);
+    }
+    const { token } = await s.a.mcpToken();
+    expect((await mcpPost(s, { Authorization: `bearer ${token}` })).status).not.toBe(401);
+    expect((await mcpPost(s, { Authorization: `bearer ${token.toLowerCase()}` })).status).toBe(401); // the credential itself stays case-sensitive
   });
 
   it("X-Forwarded-For selects the limiter bucket only when the proxy is trusted", async () => {
@@ -347,9 +317,9 @@ describe("Host allowlist, failure limiter and infrastructure errors", () => {
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     try {
       const s = await start({ httpPool: broken });
-      const jwt = await s.sign({ sub: `${s.tag}-x`, email: `x@${s.tag}.example.test`, email_verified: true });
+      const sess = `ms_${"C".repeat(43)}`;
       const mcpTok = `mn_${"B".repeat(43)}`;
-      const r1 = await fetch(`${s.url}/api/state`, { headers: { Authorization: `Bearer ${jwt}` } });
+      const r1 = await fetch(`${s.url}/api/state`, { headers: { Authorization: `Bearer ${sess}` } });
       const r2 = await mcpPost(s, { Authorization: `Bearer ${mcpTok}` });
       for (const r of [r1, r2]) {
         expect(r.status).toBe(503);
@@ -358,7 +328,7 @@ describe("Host allowlist, failure limiter and infrastructure errors", () => {
       }
       const dump = logs.join("\n");
       expect(dump).toContain("auth backend unavailable");
-      for (const secret of [jwt, mcpTok, "s3cr3tpw", "ECONNREFUSED", "127.0.0.1"]) expect(dump).not.toContain(secret);
+      for (const secret of [sess, mcpTok, "s3cr3tpw", "ECONNREFUSED", "127.0.0.1"]) expect(dump).not.toContain(secret);
     } finally {
       await broken.end().catch(() => undefined);
     }

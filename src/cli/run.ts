@@ -3,7 +3,7 @@ import { pendingChanges, type Relation, type WorkspaceState } from "../domain/in
 import { ApiClient, sanitize } from "./client.js";
 import { readHidden, type PromptIo } from "./prompt.js";
 import { clearSession, loadSession, saveSession, sessionPaths } from "./session.js";
-import { authConfig, CliError, guardedFetch, parseOrigin, passwordLogin, remoteLogout } from "./supabase.js";
+import { CliError, guardedFetch, parseOrigin, passwordLogin, remoteLogout } from "./http.js";
 
 export interface CliDeps {
   env: Record<string, string | undefined>;
@@ -11,7 +11,6 @@ export interface CliDeps {
   err: (line: string) => void;
   home?: string;
   fetch?: typeof fetch;
-  now?: () => number;
   /** Per-request timeout in ms (default 15000); injectable for tests. */
   timeoutMs?: number;
   /** y/N confirmation; defaults to a TTY prompt and fails when stdin is not a TTY. */
@@ -24,8 +23,8 @@ export interface CliDeps {
 }
 
 const USAGE = `Usage: npm run cli -- <command>
-  login [--email <email>]        sign in (password is prompted, never taken from arguments)
-  logout                         sign out remotely (best effort) and delete the stored session
+  login [--email <email>]        sign in to the server (password is prompted, never taken from arguments)
+  logout                         revoke the session on the server (best effort) and delete the stored session
   me                             show the signed-in user
   tokens list                    list MCP tokens
   tokens create <label> [--days N]   (days 1-365)
@@ -96,9 +95,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     }
     // Validate hosts before any prompt or network access.
     const apiUrl = parseOrigin("MNEMONIS_API_URL", deps.env.MNEMONIS_API_URL?.trim() || "http://127.0.0.1:8787");
-    if (deps.env.SUPABASE_URL?.trim()) parseOrigin("SUPABASE_URL", deps.env.SUPABASE_URL);
     const f = guardedFetch(deps.fetch, deps.timeoutMs);
-    const client = new ApiClient({ apiUrl, env: deps.env, home: deps.home, fetch: f, now: deps.now });
+    const client = new ApiClient({ apiUrl, home: deps.home, fetch: f });
     const io: PromptIo = deps.io ?? { input: process.stdin, output: process.stdout };
     const post = (op: string, body: unknown) => client.request<{ value: unknown }>("POST", `/api/ops/${op}`, body);
 
@@ -106,7 +104,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       case "login": {
         const p = parse(rest, ["email"]);
         need(p, 0, "login [--email <email>]");
-        const cfg = authConfig(deps.env);
         let email = p.flags.get("email");
         if (!email) {
           if (deps.askLine) email = await deps.askLine("Email: ");
@@ -123,7 +120,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (!email) throw new CliError("An email is required.");
         const password = await (deps.askPassword ?? ((q) => readHidden(q, io)))("Password: ");
         if (!password) throw new CliError("A password is required.");
-        saveSession(await passwordLogin(cfg, apiUrl, email, password, f), deps.home);
+        saveSession(await passwordLogin(apiUrl, email, password, f), deps.home);
         out(`Logged in. Session stored in ${sessionPaths(deps.home).file}`);
         return 0;
       }
@@ -135,22 +132,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         } catch {
           /* unsafe or unreadable file: still delete it locally below */
         }
-        let remote: "ok" | "failed" | "skipped" = "skipped";
-        let why = "no readable session";
-        if (s) {
-          try {
-            const cfg = authConfig(deps.env);
-            if (s.supabaseUrl !== cfg.supabaseUrl) why = "SUPABASE_URL differs from the host that issued the session";
-            else remote = (await remoteLogout(cfg, s.access_token, f)) ? "ok" : "failed";
-          } catch {
-            why = "SUPABASE_URL / SUPABASE_ANON_KEY are not usable";
-          }
-          if (remote === "failed") why = "the Supabase logout request failed";
-        }
+        let remote = false;
+        if (s) remote = s.apiUrl === apiUrl ? await remoteLogout(apiUrl, s.token, f) : false;
         const had = clearSession(deps.home);
         if (!had && !s) out("No stored session.");
-        else if (remote === "ok") out("Logged out: session revoked remotely and the local session file deleted.");
-        else out(`Local session file deleted only; NOT revoked remotely (${why}). The refresh token stays valid until it expires or you sign out elsewhere.`);
+        else if (remote) out("Logged out: session revoked on the server and the local session file deleted.");
+        else out("Local session file deleted only; NOT revoked on the server (unreachable, expired, or a different MNEMONIS_API_URL). It stays valid there until it expires or you log out elsewhere.");
         return 0;
       }
       case "health": {

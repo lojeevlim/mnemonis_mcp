@@ -1,4 +1,5 @@
 import pg from "pg";
+import { assertDatabaseHostAllowed } from "./guard.js";
 
 export interface PoolOptions {
   connectionString?: string;
@@ -7,10 +8,11 @@ export interface PoolOptions {
   max?: number;
 }
 
-/** Pool from DATABASE_URL (or the explicit connection string). Throws if neither is set. */
+/** Pool from DATABASE_URL (or the explicit connection string). Throws if neither is set or the host is remote without the explicit opt-in. */
 export function createPool(opts: PoolOptions = {}): pg.Pool {
   const connectionString = opts.connectionString ?? process.env.DATABASE_URL;
   if (!connectionString) throw new Error("DATABASE_URL is not set");
+  assertDatabaseHostAllowed(connectionString); // refuses a remote host unless MNEMONIS_ALLOW_REMOTE_DB=true
   const pool = new pg.Pool({
     connectionString,
     max: opts.max ?? 10,

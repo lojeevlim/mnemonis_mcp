@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe as baseDescribe, expect, it, vi } from "vitest";
 import { createPgAudit } from "../src/audit.js";
-import { createJwtVerifier } from "../src/auth/jwt.js";
 import { createFailureLimiter } from "../src/http/auth.js";
 import { rawRequest, startTestServer, TEST_DB_URL, type TestServer } from "./helpers.js";
 
@@ -137,15 +136,14 @@ describe("oversize bodies are refused with 413", () => {
   });
 });
 
-describe("key-source outages", () => {
-  it("a failing key resolver answers 503 with the unavailable body and never consumes the failure budget", async () => {
+describe("credential-backend outages", () => {
+  it("a failing session lookup answers 503 with the unavailable body and never consumes the failure budget", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const limiter = createFailureLimiter({ max: 2 });
-    const down = createJwtVerifier(
-      { authIssuer: "https://test.example/auth/v1", authJwksUrl: "http://127.0.0.1:1/jwks", authAudience: "authenticated", authAlgs: ["ES256"] },
-      { keyResolver: async () => { throw new TypeError("fetch failed", { cause: new Error("ECONNREFUSED") }); } },
-    );
-    const s = await start({ failureLimiter: limiter, verifier: down });
+    const s = await start({
+      failureLimiter: limiter,
+      accounts: (real) => ({ ...real, verifySession: async () => { throw new Error("db down"); } }),
+    });
     const bodies = new Set<string>();
     for (let i = 0; i < 6; i++) {
       const r = await s.a.api("/api/state");
@@ -162,18 +160,21 @@ describe("key-source outages", () => {
 });
 
 describe("audit failure isolation", () => {
-  it("one bad row (FK violation) does not drop the others in its batch", async () => {
+  it("a row whose user is gone (FK violation) is re-inserted with user_id NULL instead of being dropped; the rest of the batch is kept", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const audit = createPgAudit(t.pool);
+    await t.pool.query("DELETE FROM audit_log WHERE action = 'iso-bad'");
     const ghost = "00000000-0000-4000-8000-0000000000aa";
     const row = (userId: string, action: string) => ({ userId, via: "rest" as const, client: "c", action, ok: true });
     audit.record(row(t.a.id, "iso1"));
     audit.record(row(ghost, "iso-bad"));
     audit.record(row(t.a.id, "iso2"));
     await audit.flush();
-    expect(audit.dropped()).toBe(1);
+    expect(audit.dropped()).toBe(0);
     const rows = await t.pool.query("SELECT action FROM audit_log WHERE user_id = $1 AND action LIKE 'iso%' ORDER BY action", [t.a.id]);
     expect(rows.rows.map((r) => r.action)).toEqual(["iso1", "iso2"]);
-    expect((await t.pool.query("SELECT 1 FROM audit_log WHERE action = 'iso-bad'")).rowCount).toBe(0);
+    const orphan = await t.pool.query("SELECT user_id, ok FROM audit_log WHERE action = 'iso-bad'");
+    expect(orphan.rows).toEqual([{ user_id: null, ok: true }]);
+    await t.pool.query("DELETE FROM audit_log WHERE action = 'iso-bad'");
   });
 });

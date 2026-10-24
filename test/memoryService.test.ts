@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSequentialContext,
@@ -11,28 +8,25 @@ import {
   type Actor,
 } from "../src/domain/index.js";
 import v1Seed from "../src/domain/__fixtures__/v1-seed.json";
-import { FileStore } from "../src/store/fileStore.js";
 import { toErrorInfo } from "../src/service/errors.js";
 import { createMemoryService, type MemoryService } from "../src/service/memoryService.js";
 import { agentActor, createAgentWriter, createRateLimiter, pendingAgentItems } from "../src/service/guards.js";
+import { MemoryStore } from "./memoryStore.js";
 
 const USER: Actor = { kind: "user", name: "me" };
-let root: string;
-let store: FileStore;
+let store: MemoryStore;
 let service: MemoryService;
 
-const fresh = (name = "data") => {
-  const s = FileStore.open({ dir: join(root, name) });
+const fresh = () => {
+  const s = new MemoryStore();
   return { store: s, service: createMemoryService({ store: s, ctx: createSequentialContext() }) };
 };
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "mnemonis-svc-"));
   ({ store, service } = fresh());
 });
 afterEach(async () => {
   await store.close();
-  rmSync(root, { recursive: true, force: true });
 });
 
 const code = (p: Promise<unknown>) => p.then(() => "ok", (e: unknown) => toErrorInfo(e).code);
@@ -216,10 +210,7 @@ describe("import / export round trip", () => {
     expect(expected.ok).toBe(true);
     if (expected.ok) expect(snap.state).toEqual(expected.state);
     expect(snap.rev).toBe(1);
-    await store.close();
-    const again = fresh();
-    store = again.store;
-    expect((await again.service.getState()).state).toEqual(snap.state);
+    expect((await service.getState()).state).toEqual(snap.state); // durability across restarts is covered by pgStore.test.ts
   });
 
   it("a v2 export (user + agent + links + collection) re-imports identically into another store", async () => {
@@ -234,7 +225,7 @@ describe("import / export round trip", () => {
     const exported = await service.exportJson();
     expect(JSON.parse(exported)).toMatchObject({ schemaVersion: SCHEMA_VERSION });
 
-    const other = fresh("other");
+    const other = fresh();
     try {
       const imported = await other.service.importJson(exported);
       expect(imported.state).toEqual((await service.getState()).state);

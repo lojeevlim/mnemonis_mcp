@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type pg from "pg";
-import { stripUnsafeChars } from "./sanitize.js";
+import { hasUnsafeChars } from "./sanitize.js";
 
 export const TOKEN_RE = /^mn_[A-Za-z0-9_-]{43}$/;
 export const DEFAULT_EXPIRES_DAYS = 90;
@@ -44,7 +44,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Mints and stores a token for the user. The plaintext is returned once and never stored. */
 export async function createToken(pool: pg.Pool, userId: string, opts: CreateTokenOptions): Promise<CreateTokenResult> {
-  const label = stripUnsafeChars(String(opts.label ?? "")).trim();
+  // Control, bidi and zero-width characters are refused (400), never silently stripped.
+  if (typeof opts.label !== "string" || hasUnsafeChars(opts.label)) return { ok: false, reason: "invalid" };
+  const label = opts.label.trim();
   const days = opts.expiresInDays ?? DEFAULT_EXPIRES_DAYS;
   if (label.length < 1 || [...label].length > LABEL_MAX) return { ok: false, reason: "invalid" };
   if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false, reason: "invalid" };

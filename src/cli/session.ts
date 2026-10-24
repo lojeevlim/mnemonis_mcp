@@ -2,19 +2,18 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CliError } from "./supabase.js";
+import { CliError } from "./http.js";
 
 export interface Session {
-  access_token: string;
-  refresh_token: string;
-  /** Unix seconds. */
-  expires_at: number;
-  /** Origins the session was issued for; it is never used or refreshed against any other host. */
-  supabaseUrl: string;
+  /** The opaque `ms_` login session token. */
+  token: string;
+  /** ISO time the session ends if it is not used again (informational; the server decides). */
+  expiresAt: string;
+  /** The origin the session was issued for; it is never sent to any other host. */
   apiUrl: string;
 }
 
-/** ~/.mnemonis (dir 0700) holding cli-session.json (file 0600). Only the Supabase tokens are stored, never the password. */
+/** ~/.mnemonis (dir 0700) holding cli-session.json (file 0600). Only the session token is stored, never the password. */
 export function sessionPaths(home: string = homedir()): { dir: string; file: string } {
   const dir = join(home, ".mnemonis");
   return { dir, file: join(dir, "cli-session.json") };
@@ -53,7 +52,7 @@ export function saveSession(s: Session, home?: string): void {
   verifiedDir(dir, true);
   const tmp = `${file}.${randomBytes(8).toString("hex")}.tmp`;
   try {
-    writeFileSync(tmp, JSON.stringify({ access_token: s.access_token, refresh_token: s.refresh_token, expires_at: s.expires_at, supabaseUrl: s.supabaseUrl, apiUrl: s.apiUrl }), {
+    writeFileSync(tmp, JSON.stringify({ token: s.token, expiresAt: s.expiresAt, apiUrl: s.apiUrl }), {
       mode: 0o600,
       flag: "wx",
     });
@@ -83,16 +82,8 @@ export function loadSession(home?: string): Session | null {
       throw new CliError(`Refusing to read the session file: permissions are ${(st.mode & 0o777).toString(8)} but must be 600. Delete it and run login again.`);
     }
     const v = JSON.parse(readFileSync(fd, "utf8")) as Partial<Session>;
-    if (
-      typeof v.access_token !== "string" ||
-      typeof v.refresh_token !== "string" ||
-      typeof v.expires_at !== "number" ||
-      typeof v.supabaseUrl !== "string" ||
-      typeof v.apiUrl !== "string"
-    ) {
-      return null;
-    }
-    return { access_token: v.access_token, refresh_token: v.refresh_token, expires_at: v.expires_at, supabaseUrl: v.supabaseUrl, apiUrl: v.apiUrl };
+    if (typeof v.token !== "string" || typeof v.expiresAt !== "string" || typeof v.apiUrl !== "string") return null;
+    return { token: v.token, expiresAt: v.expiresAt, apiUrl: v.apiUrl };
   } catch (e) {
     if (e instanceof CliError) throw e;
     return null;

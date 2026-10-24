@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { createEmptyWorkspace, migrateWorkspaceState, SCHEMA_VERSION, type Mutation, type WorkspaceState } from "../domain/index.js";
 import { parseImportJson } from "./importJson.js";
+import { assertWithinQuota, DEFAULT_QUOTAS, type Quotas } from "./quota.js";
 import { StoreError, type Snapshot, type UserStore, type WorkspaceStore } from "./types.js";
 
 interface Row {
@@ -42,10 +43,18 @@ class CallerError {
  * transactions on one user serialize across processes; different users never contend.
  */
 export class PgStore implements WorkspaceStore {
-  constructor(private readonly pool: pg.Pool) {}
+  private readonly quotas: Quotas;
+
+  /** `quotas` are per-user caps enforced on every write path (ops, import, MCP writes, operator import). */
+  constructor(
+    private readonly pool: pg.Pool,
+    quotas: Partial<Quotas> = {},
+  ) {
+    this.quotas = { ...DEFAULT_QUOTAS, ...quotas };
+  }
 
   forUser(userId: string): UserStore {
-    return new PgUserStore(this.pool, userId);
+    return new PgUserStore(this.pool, userId, this.quotas);
   }
 
   /** Creates the user's empty workspace if it does not exist yet (idempotent). */
@@ -65,6 +74,7 @@ class PgUserStore implements UserStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly userId: string,
+    private readonly quotas: Quotas,
   ) {}
 
   async read(): Promise<Snapshot> {
@@ -87,7 +97,7 @@ class PgUserStore implements UserStore {
         throw new CallerError(e); // rolls back, rethrown as-is
       }
       if (result.state === current.state) return { ...current, value: result.value };
-      return { ...(await this.update(client, result.state)), value: result.value };
+      return { ...(await this.update(client, result.state, current)), value: result.value };
     });
   }
 
@@ -96,12 +106,12 @@ class PgUserStore implements UserStore {
       if (opts.ifMatchRev !== undefined && opts.ifMatchRev !== current.rev) {
         throw new StoreError("conflict", `Revision mismatch (current ${current.rev})`);
       }
-      return this.update(client, parseImportJson(json));
+      return this.update(client, parseImportJson(json), current);
     });
   }
 
   async write(state: WorkspaceState): Promise<Snapshot> {
-    return this.locked((client) => this.update(client, state));
+    return this.locked((client, current) => this.update(client, state, current));
   }
 
   /** BEGIN; lock + load the row; run `body`; COMMIT. Any throw ROLLBACKs. Anything that is not a StoreError or the caller's own error becomes io. */
@@ -133,11 +143,13 @@ class PgUserStore implements UserStore {
     }
   }
 
-  private async update(client: pg.PoolClient, state: WorkspaceState): Promise<Snapshot> {
+  private async update(client: pg.PoolClient, state: WorkspaceState, current: Snapshot): Promise<Snapshot> {
+    const json = JSON.stringify(state);
+    assertWithinQuota(json, state, () => ({ json: JSON.stringify(current.state), memories: Object.keys(current.state.memories).length }), this.quotas);
     const row = (
       await client.query<Row>(
         "UPDATE workspaces SET rev = rev + 1, schema_version = $2, state = $3::jsonb, updated_at = now() WHERE user_id = $1 RETURNING rev, state",
-        [this.userId, SCHEMA_VERSION, JSON.stringify(state)],
+        [this.userId, SCHEMA_VERSION, json],
       )
     ).rows[0];
     if (!row) throw new StoreError("io", "Workspace not found");

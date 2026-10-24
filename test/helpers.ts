@@ -4,30 +4,35 @@ import { randomUUID } from "node:crypto";
 import { request } from "node:http";
 import type pg from "pg";
 import { createPgAudit, type PgAudit } from "../src/audit.js";
-import { createAccountService, type AccountService } from "../src/auth/accounts.js";
+import { createAccountService, type AccountConfig, type AccountService, type AccountServiceOptions } from "../src/auth/accounts.js";
 import { createToken } from "../src/auth/apiTokens.js";
-import { createJwtVerifier, type JwtVerifier } from "../src/auth/jwt.js";
-import { createUserDirectory } from "../src/auth/users.js";
-import type { SignupMode } from "../src/config.js";
+import { emailHash } from "../src/auth/throttle.js";
+import { createPasswordHasher, type PasswordHasher } from "../src/auth/password.js";
+import { createSession } from "../src/auth/sessions.js";
 import { createPool } from "../src/db/pool.js";
 import type { FailureLimiter } from "../src/http/auth.js";
+import type { AuthLimiters } from "../src/http/authRoutes.js";
 import { startHttpServer, type RunningServer } from "../src/http/server.js";
 import { createRateLimiter, type RateLimiter } from "../src/service/guards.js";
 import { createMemoryServices, type MemoryService, type MemoryServices } from "../src/service/memoryService.js";
 import { PgStore } from "../src/store/pgStore.js";
-import { AUDIENCE, ISSUER, makeKey, resolverFor, signToken, type TestKey } from "./jwtFixtures.js";
+import type { Quotas } from "../src/store/quota.js";
 
 export const TEST_DB_URL = process.env.TEST_DATABASE_URL;
 
+/** Cheap scrypt parameters so tests stay fast; the production parameters are covered in password.test.ts. */
+export const FAST_SCRYPT = { N: 2 ** 10, r: 8, p: 1 };
+export const fastHasher = (): PasswordHasher => createPasswordHasher({ params: FAST_SCRYPT });
+
 export interface TestUser {
   id: string;
-  sub: string;
   email: string;
   displayName: string;
-  /** A valid access token for this user (JWT). */
-  jwt: string;
+  password: string;
+  /** A valid login session token (`ms_...`) for this user (REST). */
+  session: string;
   service: MemoryService;
-  /** Authorization header with the JWT (REST). */
+  /** Authorization header with the session token (REST). */
   headers(extra?: Record<string, string>): Record<string, string>;
   api(path: string, init?: RequestInit): Promise<Response>;
   op(name: string, body?: unknown): Promise<Response>;
@@ -45,14 +50,17 @@ export interface TestServer {
   services: MemoryServices;
   audit: PgAudit;
   accounts: AccountService;
-  key: TestKey;
   /** Unique per server; every user/email created by this server (also via HTTP) carries it. */
   tag: string;
   server: RunningServer;
   a: TestUser;
   b: TestUser;
-  /** Signs a JWT for any claims (sub is namespaced with the tag when `plainSub` is not set). */
-  sign(claims: Record<string, unknown>, o?: Parameters<typeof signToken>[2]): Promise<string>;
+  /** Email of the form `<name>-<tag>@<tag>.example.test`: removed by close(). */
+  email(name: string): string;
+  /** A password that satisfies the policy. */
+  password(name?: string): string;
+  /** Creates a user straight in the database (fast hash) and returns it with a fresh session. */
+  makeUser(name: string): Promise<TestUser>;
   /** User A shortcuts (the old single-user API). */
   api: TestUser["api"];
   op: TestUser["op"];
@@ -62,73 +70,91 @@ export interface TestServer {
 }
 
 export interface TestServerOptions {
+  /** Fixes the per-server tag (default random); every user/email the server creates carries it. */
+  tag?: string;
   maxPending?: number;
   limiter?: RateLimiter;
   failureLimiter?: FailureLimiter;
+  mcpFailureLimiter?: FailureLimiter;
+  authLimiters?: AuthLimiters;
   allowedOrigins?: string[];
   allowedHosts?: string[];
   trustProxy?: boolean;
-  signupMode?: SignupMode;
-  allowedEmails?: string[];
   maxMcpTokens?: number;
+  /** Per-user storage quotas of the PgStore (default: the production defaults, 5 MB / 5000 memories). */
+  quotas?: Partial<Quotas>;
+  account?: Partial<AccountConfig>;
+  accountOptions?: AccountServiceOptions;
   /** Replace the pool used by the HTTP layer (e.g. a broken one for 503 tests). Data setup still uses the real DB. */
   httpPool?: pg.Pool;
   accounts?: (real: AccountService) => AccountService;
   audit?: PgAudit;
-  /** Replace the JWT verifier (e.g. one whose key source is down). */
-  verifier?: JwtVerifier;
 }
+
+const noLimit: FailureLimiter = { blocked: () => false, fail: () => undefined };
 
 /** A real multi-user server on an ephemeral port against TEST_DATABASE_URL, with users A and B pre-provisioned. */
 export async function startTestServer(opts: TestServerOptions = {}): Promise<TestServer> {
   if (!TEST_DB_URL) throw new Error("TEST_DATABASE_URL is not set");
   const pool = createPool({ connectionString: TEST_DB_URL, max: 8 });
-  const tag = randomUUID().slice(0, 8);
-  const key = await makeKey(`k-${tag}`);
-  const store = new PgStore(pool);
+  const tag = opts.tag ?? randomUUID().slice(0, 8);
+  const store = new PgStore(pool, opts.quotas);
   const services = createMemoryServices({ store });
   const audit = opts.audit ?? createPgAudit(pool);
   const httpPool = opts.httpPool ?? pool;
-  const httpStore = opts.httpPool ? new PgStore(opts.httpPool) : store;
-  const cfg = { authIssuer: ISSUER, authJwksUrl: `${ISSUER}/.well-known/jwks.json`, authAudience: AUDIENCE, authAlgs: ["ES256"] };
-  const realAccounts = createAccountService(httpPool, { maxMcpTokens: opts.maxMcpTokens ?? 20 });
+  const httpStore = opts.httpPool ? new PgStore(opts.httpPool, opts.quotas) : store;
+  const hasher = fastHasher();
+  const accountCfg: AccountConfig = {
+    maxMcpTokens: opts.maxMcpTokens ?? 20,
+    allowRegistration: true,
+    allowedEmails: [],
+    maxUsers: 100_000,
+    sessionIdleDays: 7,
+    sessionMaxDays: 30,
+    ...opts.account,
+  };
+  const realAccounts = createAccountService(httpPool, httpStore, accountCfg, { hasher, ...opts.accountOptions });
   const accounts = opts.accounts ? opts.accounts(realAccounts) : realAccounts;
   const server = await startHttpServer({
     services: opts.httpPool ? createMemoryServices({ store: httpStore }) : services,
     audit,
-    verifier: opts.verifier ?? createJwtVerifier(cfg, { keyResolver: resolverFor(key) }),
-    directory: createUserDirectory(httpPool, httpStore, { signupMode: opts.signupMode ?? "closed", allowedEmails: opts.allowedEmails ?? [] }),
     accounts,
     allowedOrigins: opts.allowedOrigins ?? ["http://localhost:5173"],
     allowedHosts: opts.allowedHosts,
     trustProxy: opts.trustProxy,
     limiter: opts.limiter ?? createRateLimiter(),
-    // Every test request comes from 127.0.0.1: keep the pre-auth limiter out of the way unless a test sets one.
-    failureLimiter: opts.failureLimiter ?? { blocked: () => false, fail: () => undefined },
+    // Every test request comes from 127.0.0.1: keep the per-client limiters out of the way unless a test sets them.
+    failureLimiter: opts.failureLimiter ?? noLimit,
+    mcpFailureLimiter: opts.mcpFailureLimiter ?? noLimit,
+    authLimiters: opts.authLimiters ?? { register: noLimit, login: noLimit, config: noLimit },
     maxPending: opts.maxPending,
     host: "127.0.0.1",
     port: 0,
   });
   const url = `http://127.0.0.1:${server.port}`;
 
-  const sign = (claims: Record<string, unknown>, o?: Parameters<typeof signToken>[2]) => signToken(key, claims, o);
+  const email = (name: string) => `${name}-${tag}@${tag}.example.test`;
+  const password = (name = "x") => `Pw-${tag}-${name}-zebra-lamp`;
 
   const makeUser = async (name: string): Promise<TestUser> => {
-    const sub = `${tag}-${name}`;
-    const email = `${name}-${tag}@${tag}.example.test`;
     const displayName = `User ${name.toUpperCase()}`;
-    const row = await pool.query<{ id: string }>("INSERT INTO users (email, display_name, auth_subject) VALUES ($1, $2, $3) RETURNING id", [email, displayName, sub]);
+    const pw = password(name);
+    const row = await pool.query<{ id: string }>(
+      "INSERT INTO users (email, display_name, password_hash, password_updated_at) VALUES ($1, $2, $3, now()) RETURNING id",
+      [email(name), displayName, await hasher.hash(pw)],
+    );
     const id = row.rows[0]!.id;
     await store.ensureWorkspace(id);
-    const jwt = await sign({ sub, email, email_verified: true });
-    const headers = (extra: Record<string, string> = {}) => ({ Authorization: `Bearer ${jwt}`, ...extra });
+    const created = await createSession(pool, id, { idleDays: accountCfg.sessionIdleDays, maxDays: accountCfg.sessionMaxDays }, "vitest");
+    const session = created!.token;
+    const headers = (extra: Record<string, string> = {}) => ({ Authorization: `Bearer ${session}`, ...extra });
     const api = (path: string, init: RequestInit = {}) => fetch(`${url}${path}`, { ...init, headers: headers(init.headers as Record<string, string>) });
     return {
       id,
-      sub,
-      email,
+      email: email(name),
       displayName,
-      jwt,
+      password: pw,
+      session,
       service: services.forUser(id),
       headers,
       api,
@@ -153,12 +179,13 @@ export async function startTestServer(opts: TestServerOptions = {}): Promise<Tes
     services,
     audit,
     accounts,
-    key,
     tag,
     server,
     a,
     b,
-    sign,
+    email,
+    password,
+    makeUser,
     api: a.api,
     op: a.op,
     headers: a.headers,
@@ -169,9 +196,12 @@ export async function startTestServer(opts: TestServerOptions = {}): Promise<Tes
       await server.close();
       await audit.flush();
       // audit_log.user_id is ON DELETE SET NULL: remove this server's rows first so none are left behind.
-      const ids = `SELECT id FROM users WHERE auth_subject LIKE $1`;
-      await pool.query(`DELETE FROM audit_log WHERE user_id IN (${ids})`, [`${tag}-%`]);
-      await pool.query("DELETE FROM users WHERE auth_subject LIKE $1 OR email LIKE $2", [`${tag}-%`, `%@${tag}.example.test`]); // cascades tokens + workspaces
+      const ids = `SELECT id FROM users WHERE email LIKE $1`;
+      await pool.query(`DELETE FROM audit_log WHERE user_id IN (${ids})`, [`%@${tag}.example.test`]);
+      // Throttle rows are keyed by hashes, so they are found through this server's users (login counters and the reauth counter).
+      const users = (await pool.query<{ id: string; email: string }>(`SELECT id, email FROM users WHERE email LIKE $1`, [`%@${tag}.example.test`])).rows;
+      await pool.query("DELETE FROM login_throttle WHERE subject = ANY($1::text[])", [users.flatMap((u) => [emailHash(u.email), u.id])]);
+      await pool.query("DELETE FROM users WHERE email LIKE $1", [`%@${tag}.example.test`]); // cascades sessions, tokens + workspaces
       await pool.end();
     },
   };
@@ -209,4 +239,29 @@ export async function callTool(c: Client, name: string, args: Record<string, unk
   const r = (await c.callTool({ name, arguments: args })) as ToolResult;
   const data = JSON.parse(r.content[0].text) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   return { isError: r.isError === true, data, raw: r.content[0].text };
+}
+
+/**
+ * Wraps a real pool so the two `count(*) FROM users` statements of account registration only count the users of one
+ * test tag. The test database is shared by parallel test files, so a global user count would be racy.
+ */
+export function usersScopedToTag(real: pg.Pool, tag: string): pg.Pool {
+  const COUNT = "SELECT count(*)::int AS n FROM users";
+  const rewrite = (sql: unknown) => (sql === COUNT ? `${COUNT} WHERE email LIKE '%@${tag}.example.test'` : sql);
+  const wrapClient = (c: pg.PoolClient): pg.PoolClient =>
+    new Proxy(c, {
+      get(t, p) {
+        if (p === "query") return (sql: unknown, ...a: unknown[]) => (t.query as (...x: unknown[]) => unknown)(rewrite(sql), ...a);
+        const v = Reflect.get(t, p) as unknown;
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+  return new Proxy(real, {
+    get(t, p) {
+      if (p === "query") return (sql: unknown, ...a: unknown[]) => (t.query as (...x: unknown[]) => unknown)(rewrite(sql), ...a);
+      if (p === "connect") return async () => wrapClient(await t.connect());
+      const v = Reflect.get(t, p) as unknown;
+      return typeof v === "function" ? v.bind(t) : v;
+    },
+  });
 }

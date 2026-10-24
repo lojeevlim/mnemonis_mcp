@@ -4,21 +4,18 @@ import type { AddressInfo } from "node:net";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { AccountService } from "../auth/accounts.js";
-import type { JwtVerifier } from "../auth/jwt.js";
-import type { UserDirectory } from "../auth/users.js";
 import type { AuditLog } from "../audit.js";
 import { createMcpHandler } from "../mcp/server.js";
 import { createRateLimiter, type RateLimiter } from "../service/guards.js";
 import type { MemoryServices } from "../service/memoryService.js";
 import { createAuthMiddleware, createFailureLimiter, type AppEnv, type FailureLimiter } from "./auth.js";
+import { createAuthLimiters, registerPublicAuth, type AuthLimiters } from "./authRoutes.js";
 import { corsGuard, errorBody, hostGuard } from "./cors.js";
 import { healthBody, MAX_BODY_BYTES, registerRest, tooBig } from "./rest.js";
 
 export interface AppOptions {
   services: MemoryServices;
   audit: AuditLog;
-  verifier: JwtVerifier;
-  directory: UserDirectory;
   accounts: AccountService;
   allowedOrigins: string[];
   /** Extra Host header values accepted besides loopback:port (MNEMONIS_ALLOWED_HOSTS). */
@@ -27,7 +24,12 @@ export interface AppOptions {
   trustProxy?: boolean;
   getPort: () => number;
   limiter?: RateLimiter;
+  /** Counts failed credential checks on /api/* (session), per client. Separate from the /mcp limiter. */
   failureLimiter?: FailureLimiter;
+  /** Counts failed credential checks on /mcp, per client (its own instance: failures on one surface never lock out the other). */
+  mcpFailureLimiter?: FailureLimiter;
+  /** Per-client limiters of the public register / login / config endpoints. */
+  authLimiters?: AuthLimiters;
   maxPending?: number;
 }
 
@@ -35,13 +37,9 @@ export function createApp(opts: AppOptions): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const guard = { allowedOrigins: opts.allowedOrigins, getPort: opts.getPort, allowedHosts: opts.allowedHosts };
   const limiter = opts.limiter ?? createRateLimiter();
-  const authOpts = {
-    verifier: opts.verifier,
-    directory: opts.directory,
-    accounts: opts.accounts,
-    failureLimiter: opts.failureLimiter ?? createFailureLimiter(),
-    trustProxy: opts.trustProxy ?? false,
-  };
+  const authOpts = { accounts: opts.accounts, trustProxy: opts.trustProxy ?? false };
+  const apiFailures = opts.failureLimiter ?? createFailureLimiter();
+  const mcpFailures = opts.mcpFailureLimiter ?? createFailureLimiter();
 
   app.use("*", hostGuard(guard));
   app.use("*", corsGuard(guard));
@@ -57,11 +55,19 @@ export function createApp(opts: AppOptions): Hono<AppEnv> {
   // Public and registered before the auth middleware: no credentials, no database read, no data.
   app.get("/api/health", (c) => c.json(healthBody()));
 
-  app.use("/api/*", createAuthMiddleware("jwt", authOpts));
-  registerRest(app, { services: opts.services, audit: opts.audit, accounts: opts.accounts });
+  // Public auth endpoints: own per-client limiters and a tiny body limit, no credentials needed.
+  registerPublicAuth(app, {
+    accounts: opts.accounts,
+    audit: opts.audit,
+    limiters: opts.authLimiters ?? createAuthLimiters(),
+    trustProxy: opts.trustProxy ?? false,
+  });
+
+  app.use("/api/*", createAuthMiddleware("session", { ...authOpts, failureLimiter: apiFailures }));
+  registerRest(app, { services: opts.services, audit: opts.audit, accounts: opts.accounts, trustProxy: authOpts.trustProxy });
 
   const mcp = createMcpHandler({ services: opts.services, audit: opts.audit, limiter, maxPending: opts.maxPending });
-  app.use("/mcp", createAuthMiddleware("mcp", authOpts));
+  app.use("/mcp", createAuthMiddleware("mcp", { ...authOpts, failureLimiter: mcpFailures }));
   app.all("/mcp", bodyLimit({ maxSize: MAX_BODY_BYTES, onError: tooBig }), (c) => {
     const a = c.get("auth");
     return mcp(c, { userId: a.userId, tokenId: a.tokenId! });

@@ -8,7 +8,10 @@ describe("parseBearer", () => {
   it("accepts one strict Bearer credential and nothing else", () => {
     expect(parseBearer("Bearer abc.def-ghi_jkl")).toBe("abc.def-ghi_jkl");
     expect(parseBearer("Bearer abc==")).toBe("abc==");
-    for (const bad of [undefined, null, "", "Bearer", "Bearer ", "bearer abc", "Bearer  abc", "Bearer abc ", "Bearer a b", "Bearer a, Bearer b", "Basic abc", "Bearer a=b", `Bearer ${"a".repeat(9000)}`, "Bearer a\nb"]) {
+    // the scheme is case-insensitive (RFC 7235); the credential keeps its case
+    expect(parseBearer("bearer AbC")).toBe("AbC");
+    expect(parseBearer("BEARER AbC")).toBe("AbC");
+    for (const bad of [undefined, null, "", "Bearer", "Bearer ", "Bearer  abc", "Bearer abc ", "Bearer a b", "Bearer a, Bearer b", "Basic abc", "Bearer a=b", `Bearer ${"a".repeat(9000)}`, "Bearer a\nb"]) {
       expect(parseBearer(bad as string | undefined), String(bad)).toBeNull();
     }
   });

@@ -2,26 +2,29 @@ import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context, MiddlewareHandler } from "hono";
 import type { AccountService } from "../auth/accounts.js";
 import { TOKEN_RE } from "../auth/apiTokens.js";
-import type { JwtVerifier } from "../auth/jwt.js";
-import type { UserDirectory } from "../auth/users.js";
+import { SESSION_RE } from "../auth/sessions.js";
 import { errorBody } from "./cors.js";
+import { ipBucket } from "./ip.js";
 
 export interface AuthContext {
   userId: string;
   /** The user's display name (the human actor name on REST writes). */
   displayName: string;
-  kind: "jwt" | "mcp";
+  kind: "session" | "mcp";
   /** Set for MCP tokens only. */
   tokenId?: string;
+  /** Set for login sessions only. */
+  sessionId?: string;
+  /** Set for login sessions only: when the session ends if it is not used again. */
+  sessionExpiresAt?: Date;
 }
 
 export type AppEnv = { Variables: { auth: AuthContext } };
 
 export const MAX_AUTH_HEADER_CHARS = 8192;
-const BEARER_RE = /^Bearer ([A-Za-z0-9._~+/-]+=*)$/;
-const JWT_SHAPE_RE = /^[^.]+\.[^.]+\.[^.]+$/;
+const BEARER_RE = /^Bearer ([A-Za-z0-9._~+/-]+=*)$/i; // the auth scheme is case-insensitive (RFC 7235); the credential is not
 
-/** Exactly one, strictly formatted `Authorization: Bearer <credential>` header, or null. */
+/** Exactly one, strictly formatted `Authorization: Bearer <credential>` header (scheme case-insensitive), or null. */
 export function parseBearer(header: string | undefined | null): string | null {
   if (header === undefined || header === null || header.length > MAX_AUTH_HEADER_CHARS) return null;
   return BEARER_RE.exec(header)?.[1] ?? null;
@@ -64,26 +67,25 @@ export function createFailureLimiter(opts: { max?: number; windowMs?: number; ma
 }
 
 /**
- * Key for the pre-auth failure limiter. The socket address by default (coarse: clients behind one NAT/proxy share
- * a bucket). X-Forwarded-For is honoured only when MNEMONIS_TRUST_PROXY is set, and then only its last entry
- * (the one appended by our own proxy) is used, never client-supplied earlier entries.
+ * Client bucket used for the pre-auth limiters, the login throttle and the audit `client` field: a VALIDATED address
+ * (net.isIP), never raw header text. The socket address by default (coarse: clients behind one NAT/proxy share a bucket).
+ * X-Forwarded-For is honoured only when MNEMONIS_TRUST_PROXY is set, and then only its last entry (the one appended by
+ * our own proxy); an entry that is not an IP literal falls back to the socket address. IPv6 is bucketed by /64.
  */
 export function clientKey(c: Context, trustProxy: boolean): string {
   if (trustProxy) {
-    const last = c.req.header("x-forwarded-for")?.split(",").pop()?.trim();
-    if (last && last.length <= 64) return last;
+    const fromProxy = ipBucket(c.req.header("x-forwarded-for")?.split(",").pop());
+    if (fromProxy) return fromProxy;
   }
   try {
-    return getConnInfo(c).remote.address ?? "unknown";
+    return ipBucket(getConnInfo(c).remote.address) ?? "unknown";
   } catch {
     return "unknown";
   }
 }
 
 export interface AuthOptions {
-  verifier: JwtVerifier;
-  directory: UserDirectory;
-  accounts: Pick<AccountService, "verifyMcp">;
+  accounts: Pick<AccountService, "verifyMcp" | "verifySession">;
   failureLimiter: FailureLimiter;
   trustProxy: boolean;
 }
@@ -100,10 +102,11 @@ const unavailable = (c: Context, e: unknown) => {
 };
 
 /**
- * The credential type picks the verifier; the two are never tried in turn. /api/* takes only a JWT (three dot-
- * separated segments), /mcp takes only an `mn_` token of kind mcp. Every credential refusal is the same 401.
+ * The credential SHAPE picks the verifier; the two are never tried in turn. /api/* takes only a login session
+ * (`ms_` + 43 chars), /mcp takes only an `mn_` token of kind mcp. A wrong-shaped credential is refused before any
+ * database access, and every credential refusal is the same 401.
  */
-export function createAuthMiddleware(kind: "jwt" | "mcp", o: AuthOptions): MiddlewareHandler<AppEnv> {
+export function createAuthMiddleware(kind: "session" | "mcp", o: AuthOptions): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const key = clientKey(c, o.trustProxy);
     if (o.failureLimiter.blocked(key)) {
@@ -117,15 +120,13 @@ export function createAuthMiddleware(kind: "jwt" | "mcp", o: AuthOptions): Middl
     const cred = parseBearer(c.req.header("authorization"));
     if (cred === null) return refuse();
     try {
-      if (kind === "jwt") {
-        if (!JWT_SHAPE_RE.test(cred)) return refuse();
-        const claims = await o.verifier.verify(cred);
-        if (!claims) return refuse();
-        const user = await o.directory.resolveJwtUser(claims);
-        if (!user) return refuse();
-        c.set("auth", { userId: user.userId, displayName: user.displayName, kind: "jwt" });
+      if (kind === "session") {
+        if (!SESSION_RE.test(cred)) return refuse();
+        const p = await o.accounts.verifySession(cred);
+        if (!p) return refuse();
+        c.set("auth", { userId: p.userId, displayName: p.displayName, kind: "session", sessionId: p.sessionId, sessionExpiresAt: p.expiresAt });
       } else {
-        if (!TOKEN_RE.test(cred)) return refuse(); // wrong shape: refused before any database access
+        if (!TOKEN_RE.test(cred)) return refuse();
         const p = await o.accounts.verifyMcp(cred);
         if (!p) return refuse();
         c.set("auth", { userId: p.userId, displayName: p.displayName, kind: "mcp", tokenId: p.tokenId });

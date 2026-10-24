@@ -7,8 +7,10 @@ import { assertActor, MAX_IMPORT_BYTES, type Actor, type Json } from "../domain/
 import { StoreError } from "../store/types.js";
 import { toErrorInfo } from "../service/errors.js";
 import type { MemoryService, MemoryServices } from "../service/memoryService.js";
-import type { AccountService } from "../auth/accounts.js";
-import type { AppEnv } from "./auth.js";
+import { AccountError, type AccountService } from "../auth/accounts.js";
+import { PasswordBusyError } from "../auth/password.js";
+import { ThrottleBusyError } from "../auth/throttle.js";
+import { clientKey, type AppEnv } from "./auth.js";
 import { errorBody } from "./cors.js";
 
 /** Ordinary request bodies (ops, MCP). Imports (PUT /api/state) use MAX_IMPORT_BYTES. */
@@ -182,16 +184,45 @@ export interface RestOptions {
   services: MemoryServices;
   audit: AuditLog;
   accounts: AccountService;
+  /** Honour X-Forwarded-For for the client IP bucket (MNEMONIS_TRUST_PROXY). */
+  trustProxy?: boolean;
 }
+
+/** Maps a service error to the HTTP response. Anything that is not a deliberate refusal is an outage: 503 with the class name logged. */
+export function accountFailure(c: Context, e: unknown) {
+  if (e instanceof AccountError) {
+    if (e.retryAfter !== undefined) c.header("Retry-After", String(e.retryAfter));
+    return c.json(errorBody(e.code, e.message), e.status);
+  }
+  if (e instanceof PasswordBusyError || e instanceof ThrottleBusyError) {
+    c.header("Retry-After", "5");
+    return c.json(errorBody("busy", "Server is busy. Try again shortly."), 503);
+  }
+  console.error(`account operation failed: ${e instanceof Error ? e.name : "error"}`);
+  return c.json(errorBody("unavailable", "Service unavailable"), 503);
+}
+
+export async function readJson(c: Context): Promise<{ ok: true; value: unknown } | { ok: false }> {
+  try {
+    return { ok: true, value: JSON.parse(await c.req.text()) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+// currentPassword / password have no max: an oversize one is simply "incorrect" (the 4 KB body limit bounds the request).
+const passwordChangeBody = z.strictObject({ currentPassword: z.string(), newPassword: z.string().max(1024) });
+const deleteAccountBody = z.strictObject({ password: z.string() });
+const MAX_PASSWORD_BODY_BYTES = 4 * 1024;
 
 const tokenBody = z.strictObject({ label: z.string().max(500), expiresInDays: z.number().int().min(1).max(365).optional() });
 const MAX_TOKEN_BODY_BYTES = 16 * 1024;
 
 /**
  * Mounts the authenticated REST API. Host/Origin/auth are applied by the caller (server.ts): every handler here
- * runs only with `c.get("auth")` set to a JWT-authenticated user, and takes the user id from it and nowhere else.
+ * runs only with `c.get("auth")` set to a session-authenticated user, and takes the user id from it and nowhere else.
  */
-export function registerRest(app: Hono<AppEnv>, { services, audit, accounts }: RestOptions): void {
+export function registerRest(app: Hono<AppEnv>, { services, audit, accounts, trustProxy = false }: RestOptions): void {
   const noStore = (c: Context) => c.header("Cache-Control", "no-store");
   const who = (c: Context<AppEnv>) => {
     const a = c.get("auth");
@@ -199,11 +230,55 @@ export function registerRest(app: Hono<AppEnv>, { services, audit, accounts }: R
     return { userId: a.userId, svc: services.forUser(a.userId), user };
   };
 
-  app.get("/api/me", async (c) => {
-    const { userId } = who(c);
-    const p = await accounts.profile(userId);
+  const me = async (c: Context<AppEnv>) => {
+    const a = c.get("auth");
+    const p = await accounts.profile(a.userId);
     if (!p) return c.json(errorBody("not_found", "Not found"), 404);
-    return c.json({ id: p.id, email: p.email, displayName: p.displayName });
+    return c.json({ id: p.id, email: p.email, displayName: p.displayName, session: { expiresAt: a.sessionExpiresAt?.toISOString() ?? null } });
+  };
+  app.get("/api/auth/me", me);
+  app.get("/api/me", me); // alias kept for one release
+
+  app.post("/api/auth/logout", async (c) => {
+    const a = c.get("auth");
+    const { user } = who(c);
+    await accounts.logout(a.userId, a.sessionId!);
+    audit.record({ userId: a.userId, via: "rest", client: user.name, actorKind: "user", action: "auth:logout", ok: true });
+    return c.body(null, 204);
+  });
+
+  app.post("/api/auth/password", bodyLimit({ maxSize: MAX_PASSWORD_BODY_BYTES, onError: tooBig }), async (c) => {
+    const a = c.get("auth");
+    const { user } = who(c);
+    const raw = await readJson(c);
+    const parsed = raw.ok ? passwordChangeBody.safeParse(raw.value) : null;
+    if (!parsed?.success) return c.json(errorBody("invalid_input", "Body must be {currentPassword, newPassword}"), 400);
+    try {
+      const ip = clientKey(c, trustProxy);
+      await accounts.changePassword(a.userId, a.sessionId!, parsed.data.currentPassword, parsed.data.newPassword, { ip: ip === "unknown" ? null : ip });
+      audit.record({ userId: a.userId, via: "rest", client: user.name, actorKind: "user", action: "auth:password", ok: true });
+      return c.body(null, 204);
+    } catch (e) {
+      audit.record({ userId: a.userId, via: "rest", client: user.name, actorKind: "user", action: "auth:password", ok: false, code: e instanceof AccountError ? e.code : "unavailable" });
+      return accountFailure(c, e);
+    }
+  });
+
+  app.delete("/api/auth/me", bodyLimit({ maxSize: MAX_PASSWORD_BODY_BYTES, onError: tooBig }), async (c) => {
+    const a = c.get("auth");
+    const { user } = who(c);
+    const raw = await readJson(c);
+    const parsed = raw.ok ? deleteAccountBody.safeParse(raw.value) : null;
+    if (!parsed?.success) return c.json(errorBody("invalid_input", "Body must be {password}"), 400);
+    try {
+      await accounts.deleteAccount(a.userId, parsed.data.password);
+      // The user row is gone, so the entry carries no user id.
+      audit.record({ userId: null, via: "rest", client: "account-deleted", actorKind: "user", action: "auth:delete", ok: true });
+      return c.body(null, 204);
+    } catch (e) {
+      audit.record({ userId: a.userId, via: "rest", client: user.name, actorKind: "user", action: "auth:delete", ok: false, code: e instanceof AccountError ? e.code : "unavailable" });
+      return accountFailure(c, e);
+    }
   });
 
   app.get("/api/tokens", async (c) => {
@@ -287,6 +362,7 @@ export function registerRest(app: Hono<AppEnv>, { services, audit, accounts }: R
         c.header("ETag", etag(current));
         return c.json({ error: { code: "conflict", message: e.message }, currentRev: current }, 409);
       }
+      if (e instanceof StoreError && e.code === "too_large") return c.json(errorBody("too_large", e.message), 413); // storage quota
       return fail(c, e);
     }
   });

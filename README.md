@@ -2,70 +2,92 @@
 
 A multi-user server that owns each user's Mnemonis workspace (PostgreSQL, one workspace per user) and exposes it two ways:
 
-- **REST** (`/api/*`) for the Mnemonis web app (the human, who approves changes), authenticated with a Supabase (or other OIDC) **JWT**, and
+- **REST** (`/api/*`) for the Mnemonis web app (the human, who approves changes), authenticated with a **login session** (`ms_...`) from the server's own accounts (register / login, no external identity provider), and
 - **MCP over Streamable HTTP** (`/mcp`) for agents such as Claude Code, authenticated with an **`mn_` MCP token** the user creates. Agents can read memory and *propose* changes; every agent write lands in the Inbox as a **pending draft** that only the user can approve in the web app.
 
-HTTP only (no stdio). `GET /api/health` is the only unauthenticated endpoint. (Full documentation rewrite pending; this section is the minimal current description.)
+HTTP only (no stdio). Unauthenticated endpoints: `GET /api/health`, `GET /api/auth/config`, `POST /api/auth/register`, `POST /api/auth/login`. The two credential types are never interchangeable: a session is refused on `/mcp`, an `mn_` token is refused on every `/api/*` route (including `/api/tokens`).
 
 ## Setup and run
 
 ```bash
 npm install
-npm run db:up && npm run db:migrate   # PostgreSQL via docker compose, then apply migrations (or set MNEMONIS_AUTO_MIGRATE=1)
+npm run db:up && npm run db:migrate   # LOCAL PostgreSQL via docker compose, then apply migrations (or set MNEMONIS_AUTO_MIGRATE=1)
 npm run dev                           # tsx watch, or:  npm run build && npm start
 ```
 
-Copy `.env.example` to `.env` and load it into the shell (`set -a; . ./.env; set +a`). To create an MCP token, sign in to the web app, then call `POST /api/tokens` with the JWT (the server prints the exact `curl` and `claude mcp add` commands on start; see [docs/claude-code-setup.md](docs/claude-code-setup.md)).
+Copy `.env.example` to `.env` (set `POSTGRES_PASSWORD`, and the same password in `DATABASE_URL` / `TEST_DATABASE_URL`) and load it into the shell (`set -a; . ./.env; set +a`).
+
+**Remote-database guard.** `npm run dev`, `npm start`, `npm run db:migrate`, `npm run user` and every test/smoke pool refuse a `DATABASE_URL` whose host is not `localhost`, `127.0.0.1` or `::1` (or a unix socket), so a stray remote URL in `.env` is never migrated or written to by accident. To use a remote database on purpose, set `MNEMONIS_ALLOW_REMOTE_DB=true` explicitly in that command's environment. Point `TEST_DATABASE_URL` (tests, `npm run smoke`) only at a throw-away local database: the suite creates and deletes users, and its `globalSetup` applies pending migrations to it.
 
 ```bash
-npm run dev:jwt -- --email you@example.test   # local dev identity provider + a signed 1h JWT (see "Local development auth")
-npm run smoke              # throw-away multi-user server (TEST_DATABASE_URL): health, JWT REST, mcp token, MCP tools
+npm run smoke              # throw-away multi-user server (TEST_DATABASE_URL, local DB only): register/login, session REST, mcp token, MCP tools, surface separation
+npm run user -- list       # operator CLI (see "Operator CLI: npm run user" below)
 npm run sync-domain        # re-vendor src/domain from the web repo (../mnemonis)
 npm run typecheck && npm run lint && npm test && npm run build
 ```
 
-### Local development auth
+### Create your first account (local)
 
-`SUPABASE_URL` takes precedence over `AUTH_*`, so a `.env` that sets it must be unset to use the local issuer:
+With a loopback `HOST` (the default) registration is open. Register, then mint an MCP token from the session you get back (the web app does the same behind its Sign in page):
 
 ```bash
-npm run dev:jwt -- --email you@example.test --name "You"   # keep running; prints a JWT on stdout (valid 1 hour)
-# in another shell:
-set -a; . ./.env; set +a; unset SUPABASE_URL
-AUTH_ISSUER=http://127.0.0.1:9999 AUTH_JWKS_URL=http://127.0.0.1:9999/.well-known/jwks.json AUTH_AUDIENCE=authenticated \
-MNEMONIS_SIGNUP_MODE=open npm run dev
-curl -H "Authorization: Bearer <jwt>" http://localhost:8787/api/me
+npm run dev    # or: npm run build && npm start
+printf 'Password: '; read -rs PW; echo     # a long passphrase (12+ characters); not echoed, not in argv or shell history
+printf '%s' "$PW" | node -e 'let p="";process.stdin.on("data",d=>p+=d).on("end",()=>process.stdout.write(JSON.stringify({email:process.argv[1],password:p})))' you@example.com \
+  | curl -sS -X POST http://localhost:8787/api/auth/register -H 'Content-Type: application/json' --data-binary @-   # -> {"token":"ms_...","expiresAt":"...","user":{...}}
+SESSION=ms_...                                                           # the token from the response
+curl -sS -X POST http://localhost:8787/api/tokens -H "Authorization: Bearer $SESSION" -H 'Content-Type: application/json' \
+  -d '{"label":"claude-code"}'                                           # -> {"token":"mn_...",...}  (shown once)
+claude mcp add --transport http mnemonis http://localhost:8787/mcp --header "Authorization: Bearer mn_..."
 ```
+
+Later: `POST /api/auth/login` with the same email and password returns a fresh session. See [docs/claude-code-setup.md](docs/claude-code-setup.md). Serve the API over **TLS** (https, e.g. behind a reverse proxy) whenever it is reachable beyond localhost: passwords and session tokens travel in the request.
 
 ## Environment variables
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `DATABASE_URL` | required | PostgreSQL connection string |
-| `SUPABASE_URL` | none | Derives issuer (`<origin>/auth/v1`), JWKS URL and audience `authenticated`; takes precedence over `AUTH_*` |
-| `AUTH_ISSUER`, `AUTH_JWKS_URL`, `AUTH_AUDIENCE` | required without `SUPABASE_URL` | Non-Supabase / local issuer settings |
-| `AUTH_ALGS` | `ES256,RS256,EdDSA` | Accepted JWT algorithms (HS* and none are refused) |
-| `MNEMONIS_SIGNUP_MODE` | `closed` | `closed` (existing users only), `allowlist` or `open` (both need a verified email) |
-| `MNEMONIS_ALLOWED_EMAILS` | none | Allowlist entries: `a@b.com` or `@domain.com` |
+| `MNEMONIS_ALLOW_REGISTRATION` | `true` on loopback `HOST`, else `false` | Open self-registration. `true` on a non-loopback `HOST` requires an explicit `MNEMONIS_ALLOWED_ORIGINS` or the server refuses to start |
+| `MNEMONIS_ALLOWED_EMAILS` | none (anyone) | Registration allowlist: `a@b.com` or `@domain.com` |
+| `MNEMONIS_MAX_USERS` | `100` | Hard cap on accounts (registration closes at the cap) |
+| `MNEMONIS_SESSION_IDLE_DAYS` / `MNEMONIS_SESSION_MAX_DAYS` | `7` / `30` | Sliding idle expiry and absolute maximum lifetime of a login session |
 | `MNEMONIS_MAX_MCP_TOKENS` | `20` | Active MCP tokens per user |
+| `MNEMONIS_MAX_WORKSPACE_BYTES` | `5242880` (5 MB) | Per-user cap on the serialized workspace. Enforced on every write path (REST ops, `PUT /api/state`, MCP writes, operator import): `422 too_large` for ops / MCP, `413 too_large` for the import. A write that does not grow the workspace is always allowed, so a user over a lowered cap can still review and archive |
+| `MNEMONIS_MAX_MEMORIES` | `5000` | Per-user cap on the number of memories (same enforcement and error) |
+| `MNEMONIS_HASH_CONCURRENCY` | `2` | Concurrent scrypt hashes (1-16). Each occupies a libuv threadpool thread (4 by default), so the default leaves room for I/O. A full queue answers `503 busy` with `Retry-After: 5` |
+| `MNEMONIS_ALLOW_REMOTE_DB` | unset | Must be `true` for a `DATABASE_URL` whose host is not localhost/127.0.0.1/::1 (see the guard above) |
 | `MNEMONIS_AUTO_MIGRATE` | `false` | Run migrations on start (otherwise run `npm run db:migrate`) |
 | `PORT` | `8787` | Listen port |
 | `HOST` | `127.0.0.1` | Bind address |
 | `MNEMONIS_ALLOWED_ORIGINS` | `http://localhost:5173` | Comma-separated browser origins allowed by CORS (exact match, never `*`) |
 | `MNEMONIS_ALLOWED_HOSTS` | none | Extra exact `Host` header values accepted besides loopback with the port |
-| `MNEMONIS_TRUST_PROXY` | `false` | Only the failed-auth limiter reads `X-Forwarded-For` (its LAST entry, appended by your proxy). Enable only behind a trusted proxy that is the sole way to reach the app; otherwise clients can spoof it |
+| `MNEMONIS_TRUST_PROXY` | `false` | The rate limiters, the login throttle and the audit IP bucket read `X-Forwarded-For` (its LAST entry, appended by your proxy, and only if it is a valid IP; otherwise the socket address is used; IPv6 is bucketed by /64). Enable only behind a trusted proxy that is the sole way to reach the app; otherwise clients can spoof it. With a non-loopback `HOST` and this unset the server prints a loud warning at start (it does not fail): behind a proxy every client would share one limiter bucket |
 
 The human actor name on REST writes is the signed-in user's display name (`MNEMONIS_USER_NAME` and `MNEMONIS_DATA_DIR` are no longer used by the server).
 
 ## REST API
 
-All requests except `/api/health` need `Authorization: Bearer <JWT>` (an `mn_` MCP token is refused on `/api/*`, and a JWT is refused on `/mcp`; every refusal is the same `401`). Every `/api` response is `Cache-Control: no-store`.
+Errors are `{error: {code, message}}`; every `/api` response is `Cache-Control: no-store`. Sessions travel as `Authorization: Bearer ms_...` (no cookies, so no CSRF surface; CORS never allows credentials). Every credential refusal on `/api/*` and `/mcp` is the same `401`.
+
+Public (per-client rate limited, bodies up to 2 KB):
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/health` | exactly `{ok: true}`; no auth, no data |
-| `GET /api/me` | `{id, email, displayName}` |
-| `POST /api/tokens` | `{label, expiresInDays?}` creates an MCP token; `201 {id, token, prefix, label, createdAt, expiresAt}`; the token is shown once. 409 at the per-user cap |
+| `GET /api/auth/config` | `{registrationOpen: boolean}` (nothing else) |
+| `POST /api/auth/register` | `{email, password, displayName?}` -> `201 {token, expiresAt, user: {id, email, displayName}}`. 400 `invalid_input` (password policy / email), 403 `registration_closed` (closed, not on the allowlist, or at `MNEMONIS_MAX_USERS`), 409 `email_taken` |
+| `POST /api/auth/login` | `{email, password}` -> `200` (same body). Unknown email and wrong password are the same byte-identical `401 invalid_credentials`. 5 failures lock the account for 1 minute, doubling to 15 (`429 rate_limited` + `Retry-After`) |
+
+Session (`Authorization: Bearer ms_...`):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/auth/me` (alias `/api/me`) | `{id, email, displayName, session: {expiresAt}}` |
+| `POST /api/auth/logout` | revokes this session (204) |
+| `POST /api/auth/password` | `{currentPassword, newPassword}` -> 204; revokes all OTHER sessions; wrong current password is `403 invalid_password` |
+| `DELETE /api/auth/me` | `{password}` -> 204; deletes the account, workspace, sessions and tokens |
+| `POST /api/tokens` | `{label, expiresInDays?}` creates an MCP token; `201 {id, token, prefix, label, createdAt, expiresAt}`; the token is shown once. 409 `token_limit_reached` at the per-user cap |
 | `GET /api/tokens` | The user's MCP tokens (no secrets) |
 | `DELETE /api/tokens/:id` | Revoke (204; 404 for unknown or someone else's) |
 | `GET /api/state` | `{rev, state}`; `ETag: "<rev>"`; honours `If-None-Match` (304) |
@@ -73,27 +95,48 @@ All requests except `/api/health` need `Authorization: Bearer <JWT>` (an `mn_` M
 | `GET /api/export` | Pretty JSON export |
 | `POST /api/ops/:name` | One mutation; the JSON body is the argument object; returns `{rev, state, value}` |
 
+Passwords: 12+ characters, at most 128 bytes, no composition rules, a small list of very common passwords is refused, and so is a password equal to the email's local part. Hashing is scrypt (N=2^15, r=8, p=1, 16-byte salt) with a bounded concurrency queue (`503 busy` when saturated). Sessions are opaque `ms_` tokens stored as SHA-256, idle expiry 7 days (sliding), absolute 30 days, at most 10 active per user. Emails are not verified; registering an existing email answers `409`.
+
 Ops (same names and arguments as the web `MemoryRepository`, plus an optional agent `actor` on write ops, see below): `createMemory`, `updateMemory`, `archiveMemory`, `restoreMemory`, `rollbackMemory`, `addRelation`, `removeRelation`, `createCollection`, `updateCollection`, `deleteCollection`, `approve`, `reject`, `approveRelation`, `rejectRelation`, `approveAll`, `rejectAll`, `approveAllDetailed`, `rejectAllDetailed`. Anything else is 404. Bodies are validated with strict schemas (unknown keys: 400) and limited to 1 MB (413).
 
 The actor is the server-side human user, with one **downgrade-only** exception. For the memory/relation write ops (`createMemory`, `updateMemory`, `archiveMemory`, `restoreMemory`, `rollbackMemory`, `addRelation`) the body may carry `"actor": {"kind": "agent", "name": "<1..100 chars, no control characters>"}` (validated with the domain's `assertActor`); the write then runs as that agent and lands **pending** in the Inbox (used by the web app's rule-based Memory Health checks). Any other `actor` (kind `user`, missing, malformed) is silently ignored and the server user is used: a body can never upgrade or impersonate the user. Review ops (`approve`, `reject`, `approveRelation`, `rejectRelation`, `approveAll`, `rejectAll`, the `Detailed` variants) and `removeRelation` always run as the server user; an `actor` in their body is ignored (not rejected). Collection ops ignore it too. The audit log records the effective `actorKind` and name.
 
 Errors: `{error: {code, message}}` with 400 `invalid_input`, 404 `*_not_found`, 403 `forbidden`, 409 (`not_pending`, `proposal_outdated`, `duplicate_*`, `collection_not_empty`, `endpoint_not_saved`, `not_saved`, `memory_archived`, `conflict`), 422 `too_large`, 429 `rate_limited`/`inbox_full`, 500 `internal` (never a stack trace or file path).
 
-## Operator CLI
+## Command-line client (`npm run cli`)
 
-`npm run cli -- <command>` talks to a running server's REST API with your Supabase session. It reads only `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `MNEMONIS_API_URL` (from the environment, falling back to `.env`); nothing else in `.env` (such as `DATABASE_URL`) is loaded. `SUPABASE_ANON_KEY` must be the public key: only `sb_publishable_*` or an `anon`-role JWT is accepted, everything else (service-role, secret, malformed) is refused. `SUPABASE_URL` and `MNEMONIS_API_URL` (default `http://127.0.0.1:8787`) must be `https`, or `http` for localhost / 127.0.0.0/8 / `::1`, with no credentials, query or fragment; they are checked before any prompt or request. Requests refuse redirects and time out after 15 s.
+`npm run cli -- <command>` talks to a running server's REST API with your login session. It reads only `MNEMONIS_API_URL` (from the environment, falling back to `.env`); nothing else in `.env` (such as `DATABASE_URL`) is loaded. `MNEMONIS_API_URL` (default `http://127.0.0.1:8787`) must be `https`, or `http` for localhost / 127.0.0.0/8 / `::1`, with no credentials, query or fragment; it is checked before any prompt or request. Requests refuse redirects and time out after 15 s.
 
-The stored session is bound to the `SUPABASE_URL` and `MNEMONIS_API_URL` it was issued for; if either changes, run `login` again. The session directory must be a real directory you own, and the file is refused unless it is a regular file owned by you with mode `0600`.
+The stored session is bound to the `MNEMONIS_API_URL` it was issued for; if it changes, run `login` again. The session directory must be a real directory you own, and the file is refused unless it is a regular file owned by you with mode `0600`.
 
 | Command | Does |
 | --- | --- |
-| `login [--email <e>]` | Password is read from a hidden prompt (never from arguments). Tokens (not the password) are stored in `~/.mnemonis/cli-session.json` (dir `0700`, file `0600`) and refreshed automatically |
-| `logout` | Best-effort sign-out at Supabase (`/auth/v1/logout`, scope local), then deletes the file; it says whether the session was revoked remotely or only deleted locally |
+| `login [--email <e>]` | Password is read from a hidden prompt (never from arguments) and sent to `POST /api/auth/login`. Only the session token (not the password) is stored in `~/.mnemonis/cli-session.json` (dir `0700`, file `0600`) |
+| `logout` | Revokes the session on the server (best effort), then deletes the file; it says whether the session was revoked or only deleted locally |
 | `me` | Show id, email, display name |
 | `tokens list` / `tokens create <label> [--days N]` / `tokens revoke <id>` | Manage MCP tokens (`--days` 1-365). `create` prints the `mn_` token exactly once, inside the `claude mcp add` line. That token is long-lived and, once pasted, lands in your shell history and process arguments, so clear it from history and revoke it if it leaks |
 | `inbox` | List every pending revision (any origin, tagged) and relation: exactly the set `approve-all` would approve |
 | `approve <revisionId>` / `reject <revisionId>` / `approve-relation <id>` / `reject-relation <id>` / `approve-all [--yes]` | Review proposals. `approve-all` shows the pending count (including items not proposed by an agent) and needs `--yes` or a `y` at an interactive prompt; without a TTY it fails unless `--yes` is given |
 | `health` | Check the server |
+
+## Operator CLI: `npm run user`
+
+Run on the server machine only. It talks to the database directly with `DATABASE_URL` (which must pass the local/remote guard), exposes nothing over HTTP, and is separate from the end-user client above. Every state change writes an audit row (`via: operator`, action names and outcomes only: never passwords, hashes or workspace content). The forgotten-password flow is: the operator resets it here and gives the user the temporary password out of band.
+
+```bash
+npm run user -- list                                  # id, email, createdAt, disabled, hasPassword (never a hash)
+npm run user -- reset you@example.com                 # hidden prompt twice (needs a TTY; never read from args or pipes)
+npm run user -- reset you@example.com --generate      # prints a one-time temporary password on stdout (notices on stderr)
+npm run user -- reset you@example.com --revoke-tokens # also revokes the user's MCP tokens
+npm run user -- disable you@example.com               # block sign-in, revoke all sessions (MCP tokens stop while disabled)
+npm run user -- enable you@example.com
+npm run user -- unlock you@example.com                # clear the login lockout / failure counters
+npm run user -- import-file you@example.com           # legacy ~/.mnemonis/workspace.json (or pass a path)
+npm run user -- import-file you@example.com ./workspace.json --force
+```
+
+- `reset` sets the password (policy applies to a typed one), revokes **all** sessions, clears the lockout, failure counters and trusted-IP records. Users created before accounts existed (no password hash) are recovered the same way.
+- `import-file` validates the file with the domain's migrator, refuses unless the user's workspace is empty at revision 0 (or `--force` replaces it), applies the per-user quotas, prints counts only, and never modifies, moves or deletes the source file. The old single-user `workspace.json` and token are not adopted automatically.
 
 ## MCP tools (`POST /mcp`)
 
@@ -104,31 +147,36 @@ There are no approve, reject, delete, commit or branch tools. Tools never accept
 
 Reads return saved memory only. A memory that has never been approved is not listed or searchable, and `memory_read` shows only proposal metadata for it. Results are JSON that starts with a `notice` reminding the model that memory content is untrusted data.
 
-## Hosting on Supabase
+## Hosting notes
 
-- Set `DATABASE_URL` (operator-side, never committed) to the Supabase **pooler** connection string for the database owner role, then run `npm run db:migrate`.
-- Migration `0002_enable_rls.sql` turns on Row-Level Security with no policies for every table (`users`, `workspaces`, `api_tokens`, `audit_log`, `schema_migrations`), so the public anon key cannot read or write them through the Data API. The server connects as the table owner, which bypasses RLS (`FORCE` is deliberately not used; it would lock the owner out).
-- Never put the Supabase service-role key in this server; it only needs `SUPABASE_URL` (public JWKS) and the database URL.
+- Set `DATABASE_URL` (operator-side, never committed) to the Postgres connection string of the database owner role, then run `npm run db:migrate`.
+- Migrations `0002_enable_rls.sql`, `0003_accounts.sql` and `0004_login_throttle.sql` turn on Row-Level Security with no policies for every table (`users`, `workspaces`, `api_tokens`, `sessions`, `login_throttle`, `known_login_ips`, `audit_log`, `schema_migrations`), so a hosted Postgres' public Data API roles cannot read or write them. The server connects as the table owner, which bypasses RLS (`FORCE` is deliberately not used; it would lock the owner out).
+- Put the server behind TLS. Set `MNEMONIS_ALLOWED_ORIGINS` to your web app's origin, `MNEMONIS_ALLOWED_HOSTS` to your API host, and decide whether registration stays open (`MNEMONIS_ALLOW_REGISTRATION`, `MNEMONIS_ALLOWED_EMAILS`, `MNEMONIS_MAX_USERS`).
 - If the database password was ever shared or pasted anywhere, rotate it and update `DATABASE_URL`.
 
 ## Security model
 
 - **Host check**: the `Host` header must be `localhost`, `127.0.0.1` or `[::1]` with the server's port, or an exact (case-insensitive) match of `MNEMONIS_ALLOWED_HOSTS` (DNS-rebinding defence), on every route including `/mcp`.
 - **Origin check**: requests carrying an `Origin` header (browsers) must match `MNEMONIS_ALLOWED_ORIGINS` exactly, otherwise 403. CORS preflights answer 204 only for allowed origins; allowed methods are `GET, POST, PUT, DELETE, OPTIONS`.
-- **Credentials**: the credential type picks the verifier (JWT for `/api/*`, `mn_` token for `/mcp`); tokens are stored as SHA-256 hashes, shown once, and revocation takes effect on the next request. Database failures during authentication give `503`, not `401`. Repeated failed authentication from one client gets `429`.
+- **Credentials**: the credential shape picks the verifier (`ms_` session for `/api/*`, `mn_` token for `/mcp`); the two are never tried in turn and neither is accepted on the other surface. Sessions and tokens are stored as SHA-256 hashes, shown once, and revocation takes effect on the next request. Database failures during authentication give `503`, not `401`. Repeated failed authentication from one client gets `429`.
+- **Passwords and login**: scrypt hashes (the dummy hash is warmed at start, and a corrupt stored hash costs the same work, so there is no timing signal), byte-identical 401s for wrong password / unknown email / oversize password, per-client attempt limits on login/register, and a bounded hashing queue.
+- **Login throttling** (tables `login_throttle`, `known_login_ips`; state is persisted, so it survives restarts, and unknown emails use the very same rows, keyed by `sha256(email)`, so there is no existence signal): a *strict* lock on (email, client IP bucket) of 60 s doubling to 900 s after 5 failures, which only ever affects the client that produced the failures; and a *soft* lock on the email alone (10 failures from any clients, a fixed 60 s, never escalated, counter decays after 15 quiet minutes) that a correct password from a **known-good IP bucket** (a successful login to that account within 30 days; at most 20 per user, stored only as per-user-salted hashes, cleared on password change/reset) is NOT refused by. Re-authentication (change password, delete account) has its own persisted per-user backoff. Residual risk: someone who knows an email and can spread guesses over many addresses can keep *new-location* sign-ins to that account failing for about a minute at a time (with ~10 bad logins per minute); the owner's usual locations, and sessions already open, are unaffected, and the operator can `unlock`. With `MNEMONIS_TRUST_PROXY` unset behind a proxy all clients share one IP bucket, so set it correctly. A stolen password used from a previously known IP is not slowed by the soft lock (the strict lock and password strength remain the defence).
+- **Housekeeping**: a bounded job (every 10 minutes, and opportunistically at login) deletes expired throttle rows (the table is also capped at 50 000 rows), known-IP rows past 30 days, and sessions past their absolute/idle expiry or revoked more than 7 days ago.
 - **Per-user isolation**: every handler gets its user id only from the authenticated context; each user has a separate workspace, inbox cap and write rate limit (60 writes per minute per user, across all of that user's tokens).
 - **Agents cannot commit memory**: MCP writes go through a guard that forces an agent actor, so every write is a pending proposal. Limits: title 200 chars, content 50 000, 20 tags of 50 chars, metadata 8 KB, search query 500 chars, list limit 100, at most 200 unreviewed agent items in the Inbox, 60 writes per minute per user.
 - **Prompt injection**: memory content is data. Tool descriptions and results say so, but a model can still be misled by hostile text, so the user stays the approval gate.
-- **Audit**: the `audit_log` table records user, door, action and ids, never content or tokens (best-effort, bounded queue).
+- **Audit**: the `audit_log` table records user, door, action and ids, never content, tokens or passwords; login failures store only an IP bucket, never the submitted email (best-effort, bounded queue).
 
 ## Layout
 
 ```
 src/domain/    vendored pure domain code from the web repo (do not edit; npm run sync-domain)
-src/store/     pgStore (multi-user Postgres); fileStore/importJson are legacy and pending removal
+src/store/     pgStore (multi-user Postgres, per-user quotas), importJson (validating import parser)
 src/service/   memoryService + guards (the only things REST and MCP call)
-src/auth/      jwt, users (provisioning), apiTokens, accounts; token.ts + cli.ts are legacy and pending removal
-src/http/      Hono app: server, auth middleware, rest, cors/host/origin guards
+src/auth/      password (scrypt), email, sessions, throttle (persisted login throttling), maintenance (reaping), accounts (register/login/...), apiTokens
+src/operator/  `npm run user` operator CLI (reset/disable/enable/unlock/list/import-file)
+src/db/        pool, migrate, guard (local-only DATABASE_URL unless MNEMONIS_ALLOW_REMOTE_DB=true)
+src/http/      Hono app: server, auth middleware (session / mcp), authRoutes (public), rest, cors/host/origin guards
 src/mcp/       MCP server + the 11 tools
 src/audit.ts   Postgres audit trail
 ```

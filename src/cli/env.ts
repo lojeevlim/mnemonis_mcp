@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 /** The only variables the operator CLI ever reads; nothing else from the environment or .env reaches it. */
-export const CLI_ENV_KEYS = ["SUPABASE_URL", "SUPABASE_ANON_KEY", "MNEMONIS_API_URL"] as const;
+export const CLI_ENV_KEYS = ["MNEMONIS_API_URL"] as const;
 
 /** Minimal dotenv parser: KEY=VALUE lines, optional `export `, optional matching quotes, `#` comments. No expansion. */
 export function parseEnvFile(text: string, keys: readonly string[]): Record<string, string> {

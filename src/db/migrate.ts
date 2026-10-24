@@ -37,14 +37,20 @@ export async function migrate(pool: pg.Pool, dir: string = DEFAULT_DIR): Promise
   return applied;
 }
 
-// CLI: `npm run db:migrate`
+// CLI: `npm run db:migrate`. Refuses a remote DATABASE_URL (see db/guard.ts) unless MNEMONIS_ALLOW_REMOTE_DB=true.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const pool = createPool({ statementTimeoutMs: 0 }); // 0 = no statement timeout, long migrations must not be cancelled
+  let pool: pg.Pool | undefined;
+  try {
+    pool = createPool({ statementTimeoutMs: 0 }); // 0 = no statement timeout, long migrations must not be cancelled
+  } catch (e) {
+    console.error(`Cannot migrate: ${e instanceof Error ? e.message : "invalid DATABASE_URL"}`);
+    process.exit(1);
+  }
   migrate(pool)
     .then((applied) => console.log(applied.length ? `Applied: ${applied.join(", ")}` : "Database is up to date."))
     .catch((e: unknown) => {
       console.error(e instanceof Error ? e.message : "Migration failed");
       process.exitCode = 1;
     })
-    .finally(() => pool.end());
+    .finally(() => pool!.end());
 }

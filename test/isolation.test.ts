@@ -141,7 +141,7 @@ describe("cross-account isolation over MCP", () => {
 });
 
 describe("actor and approval", () => {
-  it("an mcp write is pending as an agent, and only the user's JWT can approve it", async () => {
+  it("an mcp write is pending as an agent, and only the user's session can approve it", async () => {
     const c = await connect(t, t.a, "claude-code");
     const saved = await callTool(c, "memory_save", { title: "Needs approval" });
     const rev = (await state(t.a)).state.revisions[saved.data.revisionId];
@@ -160,5 +160,61 @@ describe("actor and approval", () => {
     const r = (await (await t.a.op("createMemory", { title: "x", actor: { kind: "user", name: "Mallory" } })).json()) as St & { value: { id: string } };
     const rev = Object.values(r.state.revisions)[0];
     expect(rev.author).toBe("User A");
+  });
+});
+
+describe("revoked, expired, disabled and deleted credentials are refused per user", () => {
+  it("one user's session or token problems never affect the other", async () => {
+    const tokA = await t.a.mcpToken();
+    const tokB = await t.b.mcpToken();
+    const mcpStatus = async (token: string) =>
+      (await fetch(`${t.url}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "0" } } }) })).status;
+
+    // revoked session
+    await t.pool.query("UPDATE sessions SET revoked_at = now() WHERE user_id = $1", [t.a.id]);
+    expect((await t.a.api("/api/state")).status).toBe(401);
+    expect((await t.b.api("/api/state")).status).toBe(200);
+    // expired session
+    await t.pool.query("UPDATE sessions SET expires_at = now() - interval '1 minute' WHERE user_id = $1", [t.b.id]);
+    expect((await t.b.api("/api/state")).status).toBe(401);
+
+    // revoked mcp token: only that one
+    const second = await t.a.mcpToken();
+    await t.pool.query("UPDATE api_tokens SET revoked_at = now() WHERE id = $1", [tokA.id]);
+    expect(await mcpStatus(tokA.token)).toBe(401);
+    expect(await mcpStatus(second.token)).toBe(200);
+    expect(await mcpStatus(tokB.token)).toBe(200);
+    // disabled user: both doors for that user only
+    await t.pool.query("UPDATE users SET disabled_at = now() WHERE id = $1", [t.a.id]);
+    expect(await mcpStatus(second.token)).toBe(401);
+    expect(await mcpStatus(tokB.token)).toBe(200);
+    // deleted user: data and credentials gone, the other user's data intact
+    await created(t.b, "B-SURVIVES");
+    await t.pool.query("DELETE FROM users WHERE id = $1", [t.a.id]);
+    expect(await mcpStatus(second.token)).toBe(401);
+    expect((await t.pool.query("SELECT 1 FROM workspaces WHERE user_id = $1", [t.a.id])).rowCount).toBe(0);
+    const fresh = (await t.pool.query("SELECT 1 FROM workspaces WHERE user_id = $1", [t.b.id])).rowCount;
+    expect(fresh).toBe(1);
+  });
+
+  it("a user's session cannot list, create or revoke another user's tokens, or read their profile", async () => {
+    const bTok = await t.b.mcpToken("b-secret-label");
+    const list = JSON.stringify(await (await t.a.api("/api/tokens")).json());
+    expect(list).not.toContain(bTok.id);
+    expect(list).not.toContain("b-secret-label");
+    expect((await t.a.api(`/api/tokens/${bTok.id}`, { method: "DELETE" })).status).toBe(404);
+    const stillWorks = await fetch(`${t.url}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${bTok.token}` }, body: "{}" });
+    expect(stillWorks.status).not.toBe(401);
+    const me = (await (await t.a.api("/api/auth/me")).json()) as { id: string; email: string };
+    expect(me).toMatchObject({ id: t.a.id, email: t.a.email });
+  });
+
+  it("deleting account A leaves B's workspace revision counter and data untouched", async () => {
+    await created(t.b, "B-KEEP-1");
+    const del = await fetch(`${t.url}/api/auth/me`, { method: "DELETE", headers: t.a.headers({ "Content-Type": "application/json" }), body: JSON.stringify({ password: t.a.password }) });
+    expect(del.status).toBe(204);
+    const st = await state(t.b);
+    expect(st.rev).toBe(1);
+    expect(JSON.stringify(st)).toContain("B-KEEP-1");
   });
 });

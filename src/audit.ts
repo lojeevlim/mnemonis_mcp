@@ -3,10 +3,10 @@ import { join } from "node:path";
 import type pg from "pg";
 
 export interface AuditEntry {
-  /** The authenticated user the call ran as (taken from the auth context, never from request input). */
-  userId: string;
-  /** Which door the call came through. */
-  via: "rest" | "mcp";
+  /** The authenticated user the call ran as (taken from the auth context, never from request input). Null for pre-auth events and after account deletion. */
+  userId: string | null;
+  /** Which door the call came through ("operator" = the terminal-only `npm run user` CLI). */
+  via: "rest" | "mcp" | "operator";
   /** Caller label (REST user name or MCP client name). Never a token. */
   client: string;
   /** Effective actor kind the write ran as (REST ops: "user" or a downgraded "agent"). */
@@ -108,11 +108,20 @@ export function createPgAudit(pool: pg.Pool, opts: { maxQueue?: number } = {}): 
         await writeBatch(batch);
       } catch {
         // One bad row (e.g. FK violation for a deleted user) must not drop the others: retry row by row.
+        // A row whose user vanished (FK 23503) is re-inserted with user_id NULL instead of being lost.
         let failed = 0;
         for (const entry of batch) {
           try {
             await writeBatch([entry]);
-          } catch {
+          } catch (e) {
+            if ((e as { code?: unknown } | null)?.code === "23503" && entry.userId !== null) {
+              try {
+                await writeBatch([{ ...entry, userId: null }]);
+                continue;
+              } catch {
+                /* counted below */
+              }
+            }
             failed++;
           }
         }

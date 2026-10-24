@@ -10,6 +10,7 @@ export interface ErrorInfo {
 export function toErrorInfo(e: unknown): ErrorInfo {
   if (e instanceof DomainError) return { code: e.code, message: e.message };
   if (e instanceof StoreError && e.code === "conflict") return { code: "conflict", message: e.message };
+  if (e instanceof StoreError && e.code === "too_large") return { code: "too_large", message: e.message };
   if (e instanceof StoreError && e.code === "corrupt") return { code: "invalid_input", message: e.message };
   return { code: "internal", message: "Internal error" };
 }

@@ -67,7 +67,7 @@ export function corsGuard(opts: GuardOptions): MiddlewareHandler {
     if (!allowed.has(origin)) return deny(c, 403, "forbidden_origin", "Origin not allowed");
     const cors = {
       "Access-Control-Allow-Origin": origin,
-      "Access-Control-Expose-Headers": "ETag",
+      "Access-Control-Expose-Headers": "ETag, Retry-After",
       Vary: "Origin",
     };
     if (c.req.method === "OPTIONS") {

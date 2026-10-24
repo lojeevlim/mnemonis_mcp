@@ -5,7 +5,7 @@ export interface Snapshot {
   state: WorkspaceState;
 }
 
-export type StoreErrorCode = "lock_held" | "corrupt" | "missing_with_backup" | "conflict" | "io";
+export type StoreErrorCode = "lock_held" | "corrupt" | "missing_with_backup" | "conflict" | "io" | "too_large";
 
 /** Messages never contain file contents or driver errors; paths only for operator-facing startup errors. */
 export class StoreError extends Error {

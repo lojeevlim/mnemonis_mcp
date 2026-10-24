@@ -5,7 +5,7 @@ import { migrate } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
 
 const url = process.env.TEST_DATABASE_URL;
-const TABLES = ["users", "workspaces", "api_tokens", "audit_log", "schema_migrations"];
+const TABLES = ["users", "workspaces", "api_tokens", "sessions", "login_throttle", "known_login_ips", "audit_log", "schema_migrations"];
 const PROBE = "rls_probe_anon";
 
 describe.skipIf(!url)("row-level security (postgres)", () => {

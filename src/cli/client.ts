@@ -1,55 +1,27 @@
-import { loadSession, saveSession, type Session } from "./session.js";
-import { authConfig, CliError, guardedFetch, parseOrigin, refreshSession } from "./supabase.js";
+import { CliError, guardedFetch } from "./http.js";
+import { loadSession, type Session } from "./session.js";
 
 export interface ClientOptions {
   /** Validated origin (see parseOrigin). */
   apiUrl: string;
-  env: Record<string, string | undefined>;
   home?: string;
   fetch?: typeof fetch;
-  /** Seconds; injectable for tests. */
-  now?: () => number;
 }
 
 const LOGIN_HINT = "Session expired or missing. Run: npm run cli -- login";
-const REFRESH_SKEW_S = 60;
 
 export const sanitize = (s: string, max = 300): string => s.replace(/[\p{C}\p{Zl}\p{Zp}]/gu, " ").slice(0, max);
 
-/** Talks to the Mnemonis REST API with the stored Supabase session; refreshes it proactively and once on a 401. */
+/** Talks to the Mnemonis REST API with the stored login session (Authorization: Bearer ms_...). */
 export class ApiClient {
   private readonly f: typeof fetch;
-  private readonly now: () => number;
   constructor(private readonly o: ClientOptions) {
     this.f = o.fetch ?? guardedFetch();
-    this.now = o.now ?? (() => Math.floor(Date.now() / 1000));
   }
 
-  /** The session only ever talks to the hosts that issued it. */
+  /** The session only ever talks to the host that issued it. */
   private assertBound(s: Session): void {
-    const raw = this.o.env.SUPABASE_URL?.trim();
-    const supabase = raw ? parseOrigin("SUPABASE_URL", raw) : null;
-    if (s.apiUrl !== this.o.apiUrl || s.supabaseUrl !== supabase) {
-      throw new CliError("The stored session was issued for different SUPABASE_URL / MNEMONIS_API_URL hosts. Run login again.");
-    }
-  }
-
-  private async refresh(s: Session): Promise<Session> {
-    // Another process may have refreshed already (refresh tokens rotate); never replay a spent one.
-    const latest = loadSession(this.o.home);
-    if (latest && (latest.refresh_token !== s.refresh_token || latest.expires_at !== s.expires_at)) {
-      this.assertBound(latest);
-      return latest;
-    }
-    try {
-      const next = await refreshSession(authConfig(this.o.env), this.o.apiUrl, s.refresh_token, this.f);
-      saveSession(next, this.o.home);
-      return next;
-    } catch (e) {
-      // A bad key/URL config is worth showing as is; any auth failure means the user must log in again.
-      if (e instanceof CliError && /SUPABASE_/.test(e.message)) throw e;
-      throw new CliError(LOGIN_HINT);
-    }
+    if (s.apiUrl !== this.o.apiUrl) throw new CliError("The stored session was issued for a different MNEMONIS_API_URL. Run login again.");
   }
 
   private async send(method: string, path: string, token: string, body?: unknown): Promise<Response> {
@@ -65,16 +37,11 @@ export class ApiClient {
   }
 
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    let s = loadSession(this.o.home);
+    const s = loadSession(this.o.home);
     if (!s) throw new CliError(LOGIN_HINT);
     this.assertBound(s);
-    if (s.expires_at - this.now() <= REFRESH_SKEW_S) s = await this.refresh(s);
-    let res = await this.send(method, path, s.access_token, body);
-    if (res.status === 401) {
-      s = await this.refresh(s);
-      res = await this.send(method, path, s.access_token, body);
-      if (res.status === 401) throw new CliError(LOGIN_HINT);
-    }
+    const res = await this.send(method, path, s.token, body);
+    if (res.status === 401) throw new CliError(LOGIN_HINT);
     if (!res.ok) throw await apiError(res);
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;

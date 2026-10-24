@@ -1,6 +1,6 @@
 # Connect Claude Code to Mnemonis
 
-1. Start the server (`npm run dev`) and create an MCP token: sign in to the Mnemonis web app, then `POST /api/tokens` with your JWT (`curl -X POST http://localhost:8787/api/tokens -H "Authorization: Bearer <JWT>" -H "Content-Type: application/json" -d '{"label":"claude-code"}'`). The `mn_...` token in the response is shown only once. For local development, `npm run dev:jwt` issues a JWT (see the README).
+1. Start the server (`npm run dev`), register or sign in (in the Mnemonis web app, or `POST /api/auth/register` / `POST /api/auth/login`, see the README), then create an MCP token: use the web app's MCP Connections page, or `POST /api/tokens` with your login session (`curl -X POST http://localhost:8787/api/tokens -H "Authorization: Bearer <session ms_...>" -H "Content-Type: application/json" -d '{"label":"claude-code"}'`). The `mn_...` token in the response is shown only once. Each token belongs to your account and reaches only your memories.
 2. Register the server (verified against `claude mcp add --help`):
 
 ```bash
@@ -35,7 +35,7 @@ claude mcp add --transport http mnemonis http://localhost:8787/mcp --header "Aut
 
 ## Troubleshooting
 
-- `401`: unknown, revoked or expired token, or a JWT used instead of an `mn_` token. Create a new token and re-add.
+- `401`: unknown, revoked or expired token, or a login session (`ms_...`) used instead of an `mn_` token. Create a new token and re-add.
 - `503`: the database is unavailable.
 - `403 Host/Origin`: only `localhost`, `127.0.0.1` or `[::1]` with the server port are accepted as Host, plus anything in `MNEMONIS_ALLOWED_HOSTS`.
 - Port in use: set `PORT` and use the same port in the URL.

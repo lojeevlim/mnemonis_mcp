@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,18 +9,14 @@ import { runCli, type CliDeps } from "../src/cli/run.js";
 import { readHidden } from "../src/cli/prompt.js";
 import { loadCliEnv, parseEnvFile } from "../src/cli/env.js";
 import { clearSession, loadSession, saveSession, sessionPaths, type Session } from "../src/cli/session.js";
-import { assertAnonKey, CliError, parseOrigin } from "../src/cli/supabase.js";
+import { parseOrigin } from "../src/cli/http.js";
 import { hasUnsafeChars } from "../src/auth/sanitize.js";
 import { startTestServer, TEST_DB_URL, type TestServer } from "./helpers.js";
 
-const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
-const fakeKey = (role: string) => `${b64({ alg: "HS256" })}.${b64({ role })}.sig`;
-const ANON = fakeKey("anon");
-const SB = "http://127.0.0.1:1";
 const API = "http://127.0.0.1:8787";
-/** A session bound to SB / API unless overridden. */
-const sess = (o: Partial<Session> = {}): Session => ({ access_token: "a", refresh_token: "r", expires_at: 123, supabaseUrl: SB, apiUrl: API, ...o });
-const FAR = () => Math.floor(Date.now() / 1000) + 3600;
+const FAR_ISO = () => new Date(Date.now() + 7 * 86_400_000).toISOString();
+/** A session bound to API unless overridden. */
+const sess = (o: Partial<Session> = {}): Session => ({ token: `ms_${"A".repeat(43)}`, expiresAt: FAR_ISO(), apiUrl: API, ...o });
 
 interface MockApi {
   url: string;
@@ -70,13 +66,13 @@ describe("session store", () => {
     expect(statSync(dir).mode & 0o777).toBe(0o700);
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(loadSession(home)).toEqual(s);
-    expect(Object.keys(JSON.parse(readFileSync(file, "utf8"))).sort()).toEqual(["access_token", "apiUrl", "expires_at", "refresh_token", "supabaseUrl"]);
+    expect(Object.keys(JSON.parse(readFileSync(file, "utf8"))).sort()).toEqual(["apiUrl", "expiresAt", "token"]);
   });
   it("tightens a loose dir on save", () => {
     saveSession(sess(), home);
     const { dir, file } = sessionPaths(home);
     chmodSync(dir, 0o755);
-    saveSession(sess({ access_token: "b" }), home);
+    saveSession(sess({ token: "b" }), home);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
@@ -115,9 +111,9 @@ describe("session store", () => {
     saveSession(sess(), home);
     const { dir, file } = sessionPaths(home);
     writeFileSync(`${file}.1234.tmp`, "stale", { mode: 0o600 });
-    saveSession(sess({ access_token: "b" }), home);
+    saveSession(sess({ token: "b" }), home);
     expect(readdirSync(dir).sort()).toEqual(["cli-session.json", "cli-session.json.1234.tmp"]);
-    expect(loadSession(home)?.access_token).toBe("b");
+    expect(loadSession(home)?.token).toBe("b");
     // a failing rename (target is a directory) must unlink its own tmp
     rmSync(file);
     mkdirSync(file);
@@ -132,63 +128,8 @@ describe("session store", () => {
     saveSession(sess(), home);
     writeFileSync(sessionPaths(home).file, "{nope", { mode: 0o600 });
     expect(loadSession(home)).toBeNull();
-    writeFileSync(sessionPaths(home).file, JSON.stringify({ access_token: "a", refresh_token: "r", expires_at: 1 }), { mode: 0o600 });
+    writeFileSync(sessionPaths(home).file, JSON.stringify({ token: "a", expiresAt: "x" }), { mode: 0o600 });
     expect(loadSession(home)).toBeNull();
-  });
-});
-
-describe("anon key allowlist", () => {
-  const rejected: [string, string][] = [
-    ["service_role JWT", fakeKey("service_role")],
-    ["authenticated JWT", fakeKey("authenticated")],
-    ["supabase_admin JWT", fakeKey("supabase_admin")],
-    ["uppercase ANON role", fakeKey("ANON")],
-    ["role-less JWT", `${b64({ alg: "x" })}.${b64({ sub: "1" })}.sig`],
-    ["array payload", `${b64({ alg: "x" })}.${b64([1])}.sig`],
-    ["non-JSON payload", "aaa.bbb.ccc"],
-    ["two parts", `${b64({})}.${b64({ role: "anon" })}`],
-    ["bad base64url chars", `${b64({})}.${b64({ role: "anon" })}.si g`],
-    ["sb_secret_", "sb_secret_abc"],
-    ["SB_SECRET_ (any case)", "SB_SECRET_abc"],
-    ["Sb_Publishable_ (case-sensitive)", "Sb_Publishable_abc"],
-    ["empty publishable suffix", "sb_publishable_"],
-    ["opaque", "just-some-opaque-key"],
-    ["empty", ""],
-  ];
-  it.each(rejected)("refuses %s without printing it", (_n, key) => {
-    let msg = "";
-    try {
-      assertAnonKey(key);
-    } catch (e) {
-      expect(e).toBeInstanceOf(CliError);
-      msg = (e as Error).message;
-    }
-    expect(msg).toMatch(/SUPABASE_ANON_KEY/);
-    if (key) expect(msg).not.toContain(key);
-  });
-  it("accepts a publishable key and an anon JWT", () => {
-    expect(() => assertAnonKey("sb_publishable_abc123")).not.toThrow();
-    expect(() => assertAnonKey(ANON)).not.toThrow();
-  });
-  it.each(rejected.slice(0, 4))("login refuses %s before prompting or any network call", async (_n, key) => {
-    let asked = false;
-    let called = false;
-    const h = harness({
-      env: { SUPABASE_URL: SB, SUPABASE_ANON_KEY: key },
-      askPassword: async () => ((asked = true), "pw"),
-      fetch: (async () => ((called = true), new Response("{}"))) as typeof fetch,
-    });
-    expect(await h.run("login", "--email", "a@b.c")).toBe(1);
-    expect(asked || called).toBe(false);
-    expect(h.text()).not.toContain(key);
-  });
-  it("a refresh re-checks the key and makes no network call", async () => {
-    saveSession(sess({ expires_at: 1 }), home);
-    let called = false;
-    const h = harness({ env: { SUPABASE_URL: SB, SUPABASE_ANON_KEY: fakeKey("service_role"), MNEMONIS_API_URL: API }, fetch: (async () => ((called = true), new Response("{}"))) as typeof fetch });
-    expect(await h.run("me")).toBe(1);
-    expect(called).toBe(false);
-    expect(h.err.join("")).toMatch(/SUPABASE_ANON_KEY/);
   });
 });
 
@@ -231,21 +172,18 @@ describe("URL validation", () => {
     expect(msg).not.toContain("hunter2");
     expect(msg).not.toContain("example.com");
   });
-  it("the CLI validates both URLs before any prompt or network call", async () => {
-    for (const env of [
-      { SUPABASE_URL: "http://evil.example", SUPABASE_ANON_KEY: ANON },
-      { SUPABASE_URL: SB, SUPABASE_ANON_KEY: ANON, MNEMONIS_API_URL: "https://u:p@example.com" },
-    ]) {
+  it("the CLI validates the server URL before any prompt or network call", async () => {
+    for (const url of ["https://u:p@example.com", "http://evil.example", "https://example.com?x=1"]) {
       let touched = false;
       const h = harness({
-        env,
+        env: { MNEMONIS_API_URL: url },
         askLine: async () => ((touched = true), "a@b.c"),
         askPassword: async () => ((touched = true), "pw"),
         fetch: (async () => ((touched = true), new Response("{}"))) as typeof fetch,
       });
       expect(await h.run("login")).toBe(1);
       expect(touched).toBe(false);
-      expect(h.err.join("")).toMatch(/_URL/);
+      expect(h.err.join("")).toMatch(/MNEMONIS_API_URL/);
       expect(h.text()).not.toMatch(/evil\.example|u:p/);
     }
     const h = harness({ env: { MNEMONIS_API_URL: "http://example.com" }, fetch: (async () => { throw new Error("no"); }) as typeof fetch });
@@ -255,20 +193,21 @@ describe("URL validation", () => {
 });
 
 describe(".env handling", () => {
-  it("reads only the three CLI keys, never anything else", () => {
+  it("reads only the CLI key, never anything else", () => {
     const parsed = parseEnvFile(
-      ['# c', "DATABASE_URL=postgres://u:secret@h/db", 'export SUPABASE_URL="https://x.supabase.co"', "SUPABASE_ANON_KEY='sb_publishable_k'", "MNEMONIS_API_URL=http://127.0.0.1:1 # note", "OTHER=1"].join("\n"),
-      ["SUPABASE_URL", "SUPABASE_ANON_KEY", "MNEMONIS_API_URL"],
+      ["# c", "DATABASE_URL=postgres://u:secret@h/db", 'export SUPABASE_URL="https://x.supabase.co"', "MNEMONIS_API_URL=http://127.0.0.1:1 # note", "OTHER=1"].join("\n"),
+      ["MNEMONIS_API_URL"],
     );
-    expect(parsed).toEqual({ SUPABASE_URL: "https://x.supabase.co", SUPABASE_ANON_KEY: "sb_publishable_k", MNEMONIS_API_URL: "http://127.0.0.1:1" });
+    expect(parsed).toEqual({ MNEMONIS_API_URL: "http://127.0.0.1:1" });
   });
   it("loadCliEnv prefers process.env, falls back to the file, and drops unrelated variables", () => {
     const f = join(home, ".env");
-    writeFileSync(f, "DATABASE_URL=postgres://secret\nSUPABASE_URL=https://file.example\nSUPABASE_ANON_KEY=sb_publishable_file\n");
-    const env = loadCliEnv({ SUPABASE_URL: "https://proc.example", DATABASE_URL: "postgres://proc", PATH: "/bin" }, f);
-    expect(env).toEqual({ SUPABASE_URL: "https://proc.example", SUPABASE_ANON_KEY: "sb_publishable_file", MNEMONIS_API_URL: undefined });
+    writeFileSync(f, "DATABASE_URL=postgres://secret\nMNEMONIS_API_URL=https://file.example\n");
+    expect(loadCliEnv({ MNEMONIS_API_URL: "https://proc.example", DATABASE_URL: "postgres://proc", PATH: "/bin" }, f)).toEqual({ MNEMONIS_API_URL: "https://proc.example" });
+    const env = loadCliEnv({ DATABASE_URL: "postgres://proc", PATH: "/bin" }, f);
+    expect(env).toEqual({ MNEMONIS_API_URL: "https://file.example" });
     expect(JSON.stringify(env)).not.toContain("postgres");
-    expect(loadCliEnv({}, join(home, "missing.env"))).toEqual({ SUPABASE_URL: undefined, SUPABASE_ANON_KEY: undefined, MNEMONIS_API_URL: undefined });
+    expect(loadCliEnv({}, join(home, "missing.env"))).toEqual({ MNEMONIS_API_URL: undefined });
   });
 });
 
@@ -291,7 +230,7 @@ describe("hidden prompt", () => {
   it("login rejects a password in argv and never uses it", async () => {
     let called = false;
     const h = harness({
-      env: { SUPABASE_URL: "http://127.0.0.1:1", SUPABASE_ANON_KEY: ANON },
+      env: { MNEMONIS_API_URL: "http://127.0.0.1:1" },
       fetch: (async () => ((called = true), new Response("{}"))) as typeof fetch,
     });
     for (const a of [["--password", "topsecret"], ["--password=topsecret"]]) {
@@ -302,183 +241,97 @@ describe("hidden prompt", () => {
   });
 });
 
-describe("auth against a mock Supabase", () => {
-  let srv: Server;
-  let base: string;
-  let calls: { grant: string | null; apikey: string | undefined; body: Record<string, string>; path: string; auth: string | undefined }[];
-  let respond: (grant: string | null, body: Record<string, string>) => { status: number; json: unknown };
-  const readBody = (req: IncomingMessage) =>
-    new Promise<string>((res) => {
-      let b = "";
-      req.on("data", (d) => (b += d));
-      req.on("end", () => res(b));
-    });
+describe("auth against a mock Mnemonis server", () => {
+  let calls: { method: string; path: string; body: Record<string, string>; auth: string | undefined }[];
+  let respond: (path: string, body: Record<string, string>) => { status: number; json?: unknown };
+  let api: MockApi;
   beforeAll(async () => {
-    srv = createServer(async (req, res) => {
-      const u = new URL(req.url ?? "/", "http://x");
-      const body = JSON.parse((await readBody(req)) || "{}") as Record<string, string>;
-      const grant = u.searchParams.get("grant_type");
-      calls.push({ grant, apikey: req.headers.apikey as string | undefined, body, path: u.pathname + u.search, auth: req.headers.authorization });
-      const r = respond(grant, body);
-      res.writeHead(r.status, { "Content-Type": "application/json" }).end(JSON.stringify(r.json));
+    api = await mockApi((req, res, raw) => {
+      const body = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+      calls.push({ method: req.method ?? "", path: req.url ?? "", body, auth: req.headers.authorization });
+      const r = respond(req.url ?? "", body);
+      res.writeHead(r.status, { "Content-Type": "application/json" }).end(r.json === undefined ? undefined : JSON.stringify(r.json));
     });
-    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
-    base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
   });
-  afterAll(() => new Promise<void>((r) => srv.close(() => r())));
+  afterAll(() => api.close());
   beforeEach(() => {
     calls = [];
-    respond = (grant) => ({ status: 200, json: { access_token: `at-${grant}`, refresh_token: "rt2", expires_in: 3600 } });
+    respond = (path) =>
+      path === "/api/auth/login"
+        ? { status: 200, json: { token: `ms_${"B".repeat(43)}`, expiresAt: FAR_ISO(), user: { id: "1", email: "e", displayName: "d" } } }
+        : path === "/api/auth/logout"
+          ? { status: 204 }
+          : { status: 200, json: { id: "1", email: "e", displayName: "d" } };
   });
-  const env = () => ({ SUPABASE_URL: base, SUPABASE_ANON_KEY: ANON });
+  const env = () => ({ MNEMONIS_API_URL: api.url });
 
-  it("login posts the password grant with the apikey header and stores no password", async () => {
-    const h = harness({ env: env(), askPassword: async () => "s3cret-pw" });
+  it("login posts email and password to /api/auth/login and stores the session but never the password", async () => {
+    const h = harness({ env: env(), askPassword: async () => "s3cret-pw-long" });
     expect(await h.run("login", "--email", "me@example.test")).toBe(0);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ grant: "password", apikey: ANON, body: { email: "me@example.test", password: "s3cret-pw" } });
-    expect(readFileSync(sessionPaths(home).file, "utf8")).not.toContain("s3cret-pw");
-    expect(loadSession(home)?.access_token).toBe("at-password");
-    expect(h.text()).not.toContain("s3cret-pw");
-  });
-  it("failed login prints a clean error and stores nothing", async () => {
-    respond = () => ({ status: 400, json: { error_description: "Invalid login credentials" } });
-    const h = harness({ env: env(), askPassword: async () => "wrong-pw" });
-    expect(await h.run("login", "--email", "me@example.test")).toBe(1);
-    expect(h.err.join("")).toContain("Invalid login credentials");
-    expect(h.text()).not.toContain("wrong-pw");
-    expect(loadSession(home)).toBeNull();
-  });
-  it("refreshes before a call when expiring within 60s, and tells the user to log in when refresh fails", async () => {
-    const seen: string[] = [];
-    const api = createServer((req, res) => {
-      seen.push(String(req.headers.authorization));
-      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ id: "1", email: "e", displayName: "d" }));
-    });
-    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
-    const apiUrl = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
-    try {
-      const now = () => 1_000_000;
-      saveSession(sess({ access_token: "old", refresh_token: "rt1", expires_at: 1_000_030, supabaseUrl: base, apiUrl }), home);
-      const h = harness({ env: { ...env(), MNEMONIS_API_URL: apiUrl }, now });
-      expect(await h.run("me")).toBe(0);
-      expect(calls.map((c) => c.grant)).toEqual(["refresh_token"]);
-      expect(calls[0]!.body.refresh_token).toBe("rt1");
-      expect(seen).toEqual(["Bearer at-refresh_token"]);
-      expect(loadSession(home)?.refresh_token).toBe("rt2");
-      // fresh token: no refresh
-      calls = [];
-      saveSession(sess({ access_token: "fresh", refresh_token: "rt1", expires_at: 1_000_500, supabaseUrl: base, apiUrl }), home);
-      expect(await h.run("me")).toBe(0);
-      expect(calls).toHaveLength(0);
-      // refresh failure
-      respond = () => ({ status: 400, json: { error: "invalid_grant" } });
-      saveSession(sess({ access_token: "old", refresh_token: "dead", expires_at: 1_000_000, supabaseUrl: base, apiUrl }), home);
-      const h2 = harness({ env: { ...env(), MNEMONIS_API_URL: apiUrl }, now });
-      expect(await h2.run("me")).toBe(1);
-      expect(h2.err.join("")).toMatch(/login/);
-      expect(h2.text()).not.toContain("dead");
-    } finally {
-      await new Promise<void>((r) => api.close(() => r()));
-    }
-  });
-  it("on 401 refreshes once and retries; a second 401 asks for login", async () => {
-    let n = 0;
-    let always401 = false;
-    const api = createServer((req, res) => {
-      n++;
-      const ok = !always401 && req.headers.authorization === "Bearer at-refresh_token";
-      res.writeHead(ok ? 200 : 401, { "Content-Type": "application/json" }).end(JSON.stringify(ok ? { id: "1", email: "e", displayName: "d" } : { error: { code: "unauthorized", message: "no" } }));
-    });
-    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
-    const apiUrl = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
-    try {
-      saveSession(sess({ access_token: "stale", refresh_token: "rt1", expires_at: FAR(), supabaseUrl: base, apiUrl }), home);
-      const h = harness({ env: { ...env(), MNEMONIS_API_URL: apiUrl } });
-      expect(await h.run("me")).toBe(0);
-      expect(n).toBe(2);
-      expect(calls).toHaveLength(1);
-      always401 = true;
-      calls = [];
-      const h2 = harness({ env: { ...env(), MNEMONIS_API_URL: apiUrl } });
-      expect(await h2.run("me")).toBe(1);
-      expect(calls).toHaveLength(1);
-      expect(h2.err.join("")).toMatch(/login/);
-    } finally {
-      await new Promise<void>((r) => api.close(() => r()));
-    }
-  });
-  it("stores the issuing hosts in the session", async () => {
-    const h = harness({ env: { ...env(), MNEMONIS_API_URL: `${base}/ignored/path` }, askPassword: async () => "pw" });
-    expect(await h.run("login", "--email", "me@example.test")).toBe(0);
-    expect(loadSession(home)).toMatchObject({ supabaseUrl: base, apiUrl: base });
+    expect(calls).toEqual([{ method: "POST", path: "/api/auth/login", body: { email: "me@example.test", password: "s3cret-pw-long" }, auth: undefined }]);
+    expect(readFileSync(sessionPaths(home).file, "utf8")).not.toContain("s3cret-pw-long");
+    expect(loadSession(home)).toMatchObject({ token: `ms_${"B".repeat(43)}`, apiUrl: api.url });
+    expect(h.text()).not.toContain("s3cret-pw-long");
     expect(h.out.join("")).toContain(sessionPaths(home).file);
   });
-
-  it("refuses to use or refresh a session on different hosts", async () => {
+  it("failed login prints the server message cleanly and stores nothing", async () => {
+    respond = () => ({ status: 401, json: { error: { code: "invalid_credentials", message: "Invalid email or password" } } });
+    const h = harness({ env: env(), askPassword: async () => "wrong-pw-long-1" });
+    expect(await h.run("login", "--email", "me@example.test")).toBe(1);
+    expect(h.err.join("")).toContain("Invalid email or password");
+    expect(h.err.join("")).toContain("401");
+    expect(h.text()).not.toContain("wrong-pw-long-1");
+    expect(loadSession(home)).toBeNull();
+  });
+  it("a malformed login response is refused and stores nothing", async () => {
+    respond = () => ({ status: 200, json: { nope: true } });
+    const h = harness({ env: env(), askPassword: async () => "pw-long-enough-1" });
+    expect(await h.run("login", "--email", "me@example.test")).toBe(1);
+    expect(loadSession(home)).toBeNull();
+  });
+  it("sends the stored session as Bearer; a 401 asks for login (no refresh, no retry)", async () => {
+    saveSession(sess({ token: "ms_the-session", apiUrl: api.url }), home);
+    const h = harness({ env: env() });
+    expect(await h.run("me")).toBe(0);
+    expect(calls).toEqual([{ method: "GET", path: "/api/me", body: {}, auth: "Bearer ms_the-session" }]);
+    calls = [];
+    respond = () => ({ status: 401, json: { error: { code: "unauthorized", message: "no" } } });
+    const g = harness({ env: env() });
+    expect(await g.run("me")).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(g.err.join("")).toMatch(/login/);
+    expect(g.text()).not.toContain("ms_the-session");
+  });
+  it("refuses to use a session issued for a different server", async () => {
     const fetched: string[] = [];
     const f = (async (u: string) => (fetched.push(String(u)), new Response("{}"))) as unknown as typeof fetch;
-    saveSession(sess({ expires_at: 1, supabaseUrl: base, apiUrl: API }), home);
-    for (const e of [
-      { ...env(), MNEMONIS_API_URL: "http://127.0.0.1:9" }, // other API host
-      { SUPABASE_URL: "http://127.0.0.1:2", SUPABASE_ANON_KEY: ANON, MNEMONIS_API_URL: API }, // other Supabase host
-      { SUPABASE_ANON_KEY: ANON, MNEMONIS_API_URL: API }, // no Supabase host
-    ]) {
-      const h = harness({ env: e, fetch: f });
-      expect(await h.run("me")).toBe(1);
-      expect(h.err.join("")).toMatch(/different .*hosts.*login again/);
-    }
+    saveSession(sess({ apiUrl: api.url }), home);
+    const h = harness({ env: { MNEMONIS_API_URL: "http://127.0.0.1:9" }, fetch: f });
+    expect(await h.run("me")).toBe(1);
+    expect(h.err.join("")).toMatch(/different MNEMONIS_API_URL.*login again/);
     expect(fetched).toEqual([]);
-    expect(calls).toEqual([]);
   });
-
-  it("skips the refresh when another process already refreshed the session", async () => {
-    const SBX = "http://127.0.0.1:2";
-    const hits: string[] = [];
-    saveSession(sess({ access_token: "old", refresh_token: "rt-old", expires_at: FAR(), supabaseUrl: SBX, apiUrl: API }), home);
-    const f = (async (u: string, init: RequestInit) => {
-      hits.push(String(u));
-      const auth = (init.headers as Record<string, string>).Authorization;
-      if (String(u).startsWith(SBX)) return new Response(JSON.stringify({ access_token: "mine", refresh_token: "rt-mine", expires_in: 3600 }));
-      if (auth === "Bearer old") {
-        // meanwhile, another process refreshed and saved a newer session
-        saveSession(sess({ access_token: "other", refresh_token: "rt-other", expires_at: FAR() + 100, supabaseUrl: SBX, apiUrl: API }), home);
-        return new Response("{}", { status: 401 });
-      }
-      return new Response(JSON.stringify({ id: "1", email: "e", displayName: "d" }));
-    }) as unknown as typeof fetch;
-    const h = harness({ env: { SUPABASE_URL: SBX, SUPABASE_ANON_KEY: ANON, MNEMONIS_API_URL: API }, fetch: f });
-    expect(await h.run("me")).toBe(0);
-    expect(hits.some((u) => u.startsWith(SBX))).toBe(false);
-    expect(loadSession(home)?.refresh_token).toBe("rt-other");
-  });
-
-  it("logout revokes remotely (scope local) and deletes the file", async () => {
-    saveSession(sess({ access_token: "the-access", supabaseUrl: base }), home);
+  it("logout revokes on the server with the session and deletes the file", async () => {
+    saveSession(sess({ token: "ms_to-revoke", apiUrl: api.url }), home);
     const h = harness({ env: env() });
     expect(await h.run("logout")).toBe(0);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ path: "/auth/v1/logout?scope=local", apikey: ANON, auth: "Bearer the-access" });
-    expect(h.out.join("")).toMatch(/revoked remotely/);
+    expect(calls).toEqual([{ method: "POST", path: "/api/auth/logout", body: {}, auth: "Bearer ms_to-revoke" }]);
+    expect(h.out.join("")).toMatch(/revoked on the server/);
     expect(existsSync(sessionPaths(home).file)).toBe(false);
   });
-  it("logout says plainly when it could only delete locally", async () => {
+  it("logout says plainly when it could only delete locally, and never sends a session to another host", async () => {
     respond = () => ({ status: 500, json: {} });
-    saveSession(sess({ supabaseUrl: base }), home);
+    saveSession(sess({ apiUrl: api.url }), home);
     const h = harness({ env: env() });
     expect(await h.run("logout")).toBe(0);
-    expect(h.out.join("")).toMatch(/deleted only; NOT revoked remotely/);
+    expect(h.out.join("")).toMatch(/deleted only; NOT revoked on the server/);
     expect(existsSync(sessionPaths(home).file)).toBe(false);
-    // no Supabase config at all, and a session from a different Supabase host: never sent anywhere
-    for (const e of [{}, { SUPABASE_URL: "http://127.0.0.1:2", SUPABASE_ANON_KEY: ANON }]) {
-      calls = [];
-      saveSession(sess({ supabaseUrl: base }), home);
-      const g = harness({ env: e });
-      expect(await g.run("logout")).toBe(0);
-      expect(g.out.join("")).toMatch(/NOT revoked remotely/);
-      expect(calls).toEqual([]);
-      expect(existsSync(sessionPaths(home).file)).toBe(false);
-    }
+    calls = [];
+    saveSession(sess({ apiUrl: api.url }), home);
+    const g = harness({ env: { MNEMONIS_API_URL: "http://127.0.0.1:9" } });
+    expect(await g.run("logout")).toBe(0);
+    expect(g.out.join("")).toMatch(/NOT revoked/);
+    expect(calls).toEqual([]);
     const none = harness({ env: env() });
     expect(await none.run("logout")).toBe(0);
     expect(none.out.join("")).toBe("No stored session.");
@@ -486,36 +339,29 @@ describe("auth against a mock Supabase", () => {
 
   it("every request refuses redirects and carries a timeout signal", async () => {
     const seen: RequestInit[] = [];
-    const f = (async (_u: string, init: RequestInit) => (seen.push(init), new Response(JSON.stringify({ access_token: "a", refresh_token: "r", expires_in: 60 })))) as unknown as typeof fetch;
-    const h = harness({ env: env(), askPassword: async () => "pw", fetch: f });
-    await h.run("login", "--email", "a@b.c");
-    saveSession(sess({ expires_at: FAR(), supabaseUrl: base, apiUrl: API }), home);
-    await harness({ env: { ...env(), MNEMONIS_API_URL: API }, fetch: f }).run("me");
+    const f = (async (_u: string, init: RequestInit) =>
+      (seen.push(init), new Response(JSON.stringify({ token: "ms_x", expiresAt: FAR_ISO() })))) as unknown as typeof fetch;
+    await harness({ env: env(), askPassword: async () => "pw", fetch: f }).run("login", "--email", "a@b.c");
+    await harness({ env: env(), fetch: f }).run("me");
     await harness({ env: env(), fetch: f }).run("logout");
-    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen.length).toBeGreaterThanOrEqual(3);
     for (const init of seen) {
       expect(init.redirect).toBe("error");
       expect(init.signal).toBeInstanceOf(AbortSignal);
     }
   });
-  it("does not follow a redirect (the token never reaches the target)", async () => {
+  it("does not follow a redirect (the session never reaches the target)", async () => {
     const target = await mockApi((_q, res) => json(res, { id: "x", email: "stolen", displayName: "d" }));
     const redirector = await mockApi((_q, res) => res.writeHead(302, { Location: `${target.url}/api/me` }).end());
     try {
-      saveSession(sess({ expires_at: FAR(), supabaseUrl: base, apiUrl: redirector.url }), home);
-      const h = harness({ env: { ...env(), MNEMONIS_API_URL: redirector.url } });
+      saveSession(sess({ apiUrl: redirector.url }), home);
+      const h = harness({ env: { MNEMONIS_API_URL: redirector.url } });
       expect(await h.run("me")).toBe(1);
       expect(h.err.join("")).toMatch(/Cannot reach/);
       expect(target.hits).toEqual([]);
-      // and the Supabase side: a redirecting auth endpoint fails the login
-      const authRedirect = await mockApi((_q, res) => res.writeHead(307, { Location: `${target.url}/x` }).end());
-      try {
-        const g = harness({ env: { SUPABASE_URL: authRedirect.url, SUPABASE_ANON_KEY: ANON }, askPassword: async () => "pw" });
-        expect(await g.run("login", "--email", "a@b.c")).toBe(1);
-        expect(target.hits).toEqual([]);
-      } finally {
-        await authRedirect.close();
-      }
+      const g = harness({ env: { MNEMONIS_API_URL: redirector.url }, askPassword: async () => "pw" });
+      expect(await g.run("login", "--email", "a@b.c")).toBe(1);
+      expect(target.hits).toEqual([]);
     } finally {
       await redirector.close();
       await target.close();
@@ -524,8 +370,8 @@ describe("auth against a mock Supabase", () => {
   it("gives up on a server that never answers", async () => {
     const hang = await mockApi(() => undefined);
     try {
-      saveSession(sess({ expires_at: FAR(), supabaseUrl: base, apiUrl: hang.url }), home);
-      const h = harness({ env: { ...env(), MNEMONIS_API_URL: hang.url }, timeoutMs: 150 });
+      saveSession(sess({ apiUrl: hang.url }), home);
+      const h = harness({ env: { MNEMONIS_API_URL: hang.url }, timeoutMs: 150 });
       const t0 = Date.now();
       expect(await h.run("me")).toBe(1);
       expect(h.err.join("")).toMatch(/Cannot reach/);
@@ -544,8 +390,8 @@ describe("no session / unreachable server", () => {
     expect(h.err.join("")).toMatch(/login/);
   });
   it("reports an unreachable server without a stack trace or token", async () => {
-    saveSession(sess({ access_token: "tok-secret", expires_at: FAR(), supabaseUrl: SB, apiUrl: "http://127.0.0.1:1" }), home);
-    const h = harness({ env: { SUPABASE_URL: SB, MNEMONIS_API_URL: "http://127.0.0.1:1" } });
+    saveSession(sess({ token: "tok-secret", apiUrl: "http://127.0.0.1:1" }), home);
+    const h = harness({ env: { MNEMONIS_API_URL: "http://127.0.0.1:1" } });
     expect(await h.run("me")).toBe(1);
     expect(h.text()).toMatch(/Cannot reach/);
     expect(h.text()).not.toMatch(/tok-secret|\n\s+at /);
@@ -580,8 +426,8 @@ describe.skipIf(!TEST_DB_URL)("CLI against a real test server", () => {
     await t.close();
   });
   const cli = async (user = t.a) => {
-    saveSession(sess({ access_token: user.jwt, refresh_token: "unused", expires_at: FAR(), supabaseUrl: SB, apiUrl: t.url }), home);
-    return harness({ env: { SUPABASE_URL: SB, MNEMONIS_API_URL: t.url } });
+    saveSession(sess({ token: user.session, apiUrl: t.url }), home);
+    return harness({ env: { MNEMONIS_API_URL: t.url } });
   };
 
   it("health and me", async () => {
@@ -643,13 +489,13 @@ describe.skipIf(!TEST_DB_URL)("CLI against a real test server", () => {
 
     // approve-all needs --yes or a TTY confirmation
     const noTty = await cli();
-    expect(await runCli(["approve-all"], { env: { SUPABASE_URL: SB, MNEMONIS_API_URL: t.url }, out: () => undefined, err: (l) => noTty.err.push(l), home, io: { input: new PassThrough(), output: new PassThrough() } })).toBe(1);
+    expect(await runCli(["approve-all"], { env: { MNEMONIS_API_URL: t.url }, out: () => undefined, err: (l) => noTty.err.push(l), home, io: { input: new PassThrough(), output: new PassThrough() } })).toBe(1);
     expect(noTty.err.join("")).toMatch(/--yes/);
     expect(noTty.err.join("")).toMatch(/1 revision\(s\)/);
     let asked = "";
     const no = await cli();
     no.err.length = 0;
-    expect(await runCli(["approve-all"], { env: { SUPABASE_URL: SB, MNEMONIS_API_URL: t.url }, out: (l) => no.out.push(l), err: () => undefined, home, confirm: async (q) => ((asked = q), false) })).toBe(1);
+    expect(await runCli(["approve-all"], { env: { MNEMONIS_API_URL: t.url }, out: (l) => no.out.push(l), err: () => undefined, home, confirm: async (q) => ((asked = q), false) })).toBe(1);
     expect(asked).toMatch(/1 revision\(s\) and 0 relation\(s\)/);
     expect((await t.a.service.getState()).state.revisions[r3]!.status).toBe("pending");
     expect(await h.run("approve-all", "--yes")).toBe(0);
@@ -692,15 +538,31 @@ describe.skipIf(!TEST_DB_URL)("CLI against a real test server", () => {
     const h = await cli();
     expect(await h.run("approve", "does-not-exist")).toBe(1);
     expect(h.err.join("")).toMatch(/^revision_not_found: /);
-    expect(h.text()).not.toContain(t.a.jwt);
+    expect(h.text()).not.toContain(t.a.session);
     expect(h.text()).not.toMatch(/\n\s+at /);
   });
 
-  it("an invalid access token with a dead refresh asks for login", async () => {
-    saveSession(sess({ access_token: "garbage", refresh_token: "dead", expires_at: FAR(), supabaseUrl: SB, apiUrl: t.url }), home);
-    const h = harness({ env: { SUPABASE_URL: SB, MNEMONIS_API_URL: t.url } }); // no anon key: refresh cannot succeed
+  it("an invalid session asks for login without echoing it", async () => {
+    saveSession(sess({ token: `ms_${"Z".repeat(43)}`, apiUrl: t.url }), home);
+    const h = harness({ env: { MNEMONIS_API_URL: t.url } });
     expect(await h.run("me")).toBe(1);
-    expect(h.text()).not.toContain("garbage");
+    expect(h.err.join("")).toMatch(/login/);
+    expect(h.text()).not.toContain("Z".repeat(43));
+  });
+
+  it("login against the real server stores a working session; logout revokes it", async () => {
+    const h = harness({ env: { MNEMONIS_API_URL: t.url }, askPassword: async () => t.a.password });
+    expect(await h.run("login", "--email", t.a.email)).toBe(0);
+    const stored = loadSession(home)!;
+    expect(stored.token).toMatch(/^ms_/);
+    expect(await h.run("me")).toBe(0);
+    expect(h.out.join("\n")).toContain(t.a.email);
+    expect(await h.run("logout")).toBe(0);
+    expect(h.out.join("\n")).toMatch(/revoked on the server/);
+    expect((await fetch(`${t.url}/api/state`, { headers: { Authorization: `Bearer ${stored.token}` } })).status).toBe(401);
+    const bad = harness({ env: { MNEMONIS_API_URL: t.url }, askPassword: async () => "not-the-password-1" });
+    expect(await bad.run("login", "--email", t.a.email)).toBe(1);
+    expect(bad.err.join("")).toContain("Invalid email or password");
   });
 });
 
@@ -740,8 +602,8 @@ describe("output hygiene and token states against a mock API", () => {
   });
   afterAll(() => api.close());
   const go = () => {
-    saveSession(sess({ expires_at: FAR(), supabaseUrl: SB, apiUrl: api.url }), home);
-    return harness({ env: { SUPABASE_URL: SB, MNEMONIS_API_URL: api.url } });
+    saveSession(sess({ apiUrl: api.url }), home);
+    return harness({ env: { MNEMONIS_API_URL: api.url } });
   };
 
   it("sanitizes everything the server supplies", async () => {
@@ -771,14 +633,12 @@ describe("output hygiene and token states against a mock API", () => {
     expect(h.err).toEqual([]);
   });
   it("refuses and never prints a malformed token", async () => {
-    const bad = await mockApi((_q, res) => json(res, { id: "i", token: "mn_bad token\u001b[31m", expiresAt: null }));
     try {
-      saveSession(sess({ expires_at: FAR(), supabaseUrl: SB, apiUrl: bad.url }), home);
       for (const token of ["mn_bad token\u001b[31m", "xx_abc", "mn_", "mn_a\nb", 5]) {
         const srv = await mockApi((_q, res) => json(res, { id: "i", token, expiresAt: null }));
         try {
-          saveSession(sess({ expires_at: FAR(), supabaseUrl: SB, apiUrl: srv.url }), home);
-          const h = harness({ env: { SUPABASE_URL: SB, MNEMONIS_API_URL: srv.url } });
+          saveSession(sess({ apiUrl: srv.url }), home);
+          const h = harness({ env: { MNEMONIS_API_URL: srv.url } });
           expect(await h.run("tokens", "create", "l")).toBe(1);
           expect(h.out).toEqual([]);
           expect(h.err.join("")).toMatch(/malformed token/);
@@ -788,7 +648,7 @@ describe("output hygiene and token states against a mock API", () => {
         }
       }
     } finally {
-      await bad.close();
+      /* each server is closed above */
     }
   });
 });

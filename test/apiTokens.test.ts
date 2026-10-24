@@ -40,7 +40,7 @@ describe("revokeToken input validation", () => {
     await expect(verifyMcpToken(fake, mintToken())).rejects.toThrow("db down");
   });
 
-  it("strips bidi and zero-width characters from labels", async () => {
+  it("refuses (never silently strips) labels with control, bidi or zero-width characters", async () => {
     const calls: unknown[][] = [];
     const client = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
@@ -55,8 +55,11 @@ describe("revokeToken input validation", () => {
       release: vi.fn(),
     };
     const fake = { connect: async () => client } as unknown as Pool;
-    const r = await createToken(fake, "u", { label: "\u202Elap\u200Btop\u2066\uFEFF" });
-    expect(r).toMatchObject({ ok: true, label: "laptop" });
+    for (const label of ["\u202Elap\u200Btop\u2066\uFEFF", "my\u0007 laptop", "a\nb", "tab\there", "del\u007f"]) {
+      expect(await createToken(fake, "u", { label }), JSON.stringify(label)).toEqual({ ok: false, reason: "invalid" });
+    }
+    expect(calls).toEqual([]); // nothing was inserted
+    expect(await createToken(fake, "u", { label: "  laptop  " })).toMatchObject({ ok: true, label: "laptop" }); // plain whitespace is just trimmed
     expect(calls[0]![3]).toBe("laptop");
   });
 });
@@ -88,7 +91,7 @@ describe.skipIf(!url)("api tokens (postgres)", () => {
 
   it("create, verify, list, revoke lifecycle", async () => {
     const uid = await newUser();
-    const t = await mk(uid, "  my\u0007 laptop\n ");
+    const t = await mk(uid, "  my laptop  ");
     expect(t.token).toMatch(TOKEN_RE);
     expect(t.label).toBe("my laptop");
     expect(await verifyMcpToken(pool, t.token)).toEqual({ tokenId: t.id, userId: uid, displayName: "Tok User" });

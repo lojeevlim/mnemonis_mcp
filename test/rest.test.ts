@@ -43,7 +43,7 @@ describe("authentication", () => {
     }
   });
 
-  it("the JWT never appears in any response body or header", async () => {
+  it("the session token never appears in any response body or header", async () => {
     const responses = [
       await fetch(`${t.url}/api/health`),
       await t.api("/api/state"),
@@ -51,11 +51,11 @@ describe("authentication", () => {
       await t.op("createMemory", { title: "x" }),
       await t.op("nope"),
       await fetch(`${t.url}/api/state`, { headers: { Authorization: "Bearer wrong" } }),
-      await fetch(`${t.url}/api/state`, { headers: { Origin: "http://evil.test", Authorization: `Bearer ${t.a.jwt}` } }),
+      await fetch(`${t.url}/api/state`, { headers: { Origin: "http://evil.test", Authorization: `Bearer ${t.a.session}` } }),
     ];
     for (const r of responses) {
       const dump = JSON.stringify([...r.headers.entries()]) + (await r.text());
-      expect(dump).not.toContain(t.a.jwt);
+      expect(dump).not.toContain(t.a.session);
     }
   });
 
@@ -68,7 +68,7 @@ describe("authentication", () => {
 
 describe("Host and Origin validation", () => {
   it("403 for a forged Host header (DNS rebinding), 200 for localhost forms", async () => {
-    const h = { Authorization: `Bearer ${t.a.jwt}` };
+    const h = { Authorization: `Bearer ${t.a.session}` };
     expect((await rawRequest(t.port, { path: "/api/health", host: "evil.test", headers: h })).status).toBe(403);
     expect((await rawRequest(t.port, { path: "/api/health", host: "localhost", headers: h })).status).toBe(403); // no port
     expect((await rawRequest(t.port, { path: "/api/health", host: `localhost:${t.port + 1}`, headers: h })).status).toBe(403);
@@ -90,7 +90,7 @@ describe("Host and Origin validation", () => {
     const r = await fetch(`${t.url}/api/state`, { headers: t.headers({ Origin: ORIGIN }) });
     expect(r.status).toBe(200);
     expect(r.headers.get("access-control-allow-origin")).toBe(ORIGIN);
-    expect(r.headers.get("access-control-expose-headers")).toBe("ETag");
+    expect(r.headers.get("access-control-expose-headers")).toBe("ETag, Retry-After"); // the browser client must be able to read Retry-After on 429/503
     expect(r.headers.get("vary")).toContain("Origin");
   });
 });
