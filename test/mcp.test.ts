@@ -3,7 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterEach, beforeEach, describe as baseDescribe, expect, it } from "vitest";
 import { createRateLimiter } from "../src/service/guards.js";
 import { TOOL_NAMES } from "../src/mcp/tools.js";
-import { startTestServer, TEST_DB_URL, type TestServer, type TestUser } from "./helpers.js";
+import { startTestServer, TEST_DB_URL, type TestServer, type TestUser } from "./adapterHelpers.js";
 
 const describe = baseDescribe.skipIf(!TEST_DB_URL);
 
