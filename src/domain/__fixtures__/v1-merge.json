@@ -1,0 +1,539 @@
+{
+ "schemaVersion": 1,
+ "currentBranchId": "main",
+ "memories": {
+  "m1": {
+   "id": "m1",
+   "createdAt": "2026-02-01T00:00:01.000Z",
+   "source": "manual",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "alice"
+   }
+  },
+  "m2": {
+   "id": "m2",
+   "createdAt": "2026-02-01T00:00:03.000Z",
+   "source": "manual",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "alice"
+   }
+  },
+  "m3": {
+   "id": "m3",
+   "createdAt": "2026-02-01T00:00:05.000Z",
+   "source": "manual",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "alice"
+   }
+  },
+  "m4": {
+   "id": "m4",
+   "createdAt": "2026-02-01T00:00:11.000Z",
+   "source": "manual",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "alice"
+   }
+  }
+ },
+ "revisions": {
+  "rev_1": {
+   "id": "rev_1",
+   "memoryId": "m1",
+   "branchId": "main",
+   "snapshot": {
+    "title": "One",
+    "content": "a\nb\nc",
+    "type": "fact",
+    "tags": [],
+    "collectionId": "col_a",
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_4",
+   "createdAt": "2026-02-01T00:00:02.000Z",
+   "author": "alice"
+  },
+  "rev_2": {
+   "id": "rev_2",
+   "memoryId": "m2",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Two",
+    "content": "two",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_4",
+   "createdAt": "2026-02-01T00:00:04.000Z",
+   "author": "alice"
+  },
+  "rev_3": {
+   "id": "rev_3",
+   "memoryId": "m3",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Three",
+    "content": "three",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_4",
+   "createdAt": "2026-02-01T00:00:06.000Z",
+   "author": "alice"
+  },
+  "rev_6": {
+   "id": "rev_6",
+   "memoryId": "m1",
+   "branchId": "feat",
+   "snapshot": {
+    "title": "One",
+    "content": "a\nB-feature\nc",
+    "type": "fact",
+    "tags": [],
+    "collectionId": "col_a",
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_1",
+   "commitId": "commit_9",
+   "createdAt": "2026-02-01T00:00:09.000Z",
+   "author": "alice"
+  },
+  "rev_7": {
+   "id": "rev_7",
+   "memoryId": "m2",
+   "branchId": "feat",
+   "snapshot": {
+    "title": "Two (feat)",
+    "content": "two",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_2",
+   "commitId": "commit_9",
+   "createdAt": "2026-02-01T00:00:10.000Z",
+   "author": "alice"
+  },
+  "rev_8": {
+   "id": "rev_8",
+   "memoryId": "m4",
+   "branchId": "feat",
+   "snapshot": {
+    "title": "Four",
+    "content": "four",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_9",
+   "createdAt": "2026-02-01T00:00:12.000Z",
+   "author": "alice"
+  },
+  "rev_10": {
+   "id": "rev_10",
+   "memoryId": "m4",
+   "branchId": "feat",
+   "snapshot": {
+    "title": "Four",
+    "content": "four draft",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_8",
+   "commitId": null,
+   "createdAt": "2026-02-01T00:00:14.000Z",
+   "author": "alice"
+  },
+  "rev_11": {
+   "id": "rev_11",
+   "memoryId": "m1",
+   "branchId": "main",
+   "snapshot": {
+    "title": "One",
+    "content": "a\nB-main\nc",
+    "type": "fact",
+    "tags": [],
+    "collectionId": "col_a",
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_1",
+   "commitId": "commit_12",
+   "createdAt": "2026-02-01T00:00:15.000Z",
+   "author": "alice"
+  },
+  "rev_13": {
+   "id": "rev_13",
+   "memoryId": "m3",
+   "branchId": "other",
+   "snapshot": {
+    "title": "Three",
+    "content": "three other",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_3",
+   "commitId": "commit_14",
+   "createdAt": "2026-02-01T00:00:17.000Z",
+   "author": "alice"
+  },
+  "rev_16": {
+   "id": "rev_16",
+   "memoryId": "m3",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Three",
+    "content": "three other",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_3",
+   "commitId": "commit_15",
+   "createdAt": "2026-02-01T00:00:19.000Z",
+   "author": "alice"
+  },
+  "rev_17": {
+   "id": "rev_17",
+   "memoryId": "m2",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Two",
+    "content": "two draft 1",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_2",
+   "commitId": "commit_22",
+   "createdAt": "2026-02-01T00:00:20.000Z",
+   "author": "alice"
+  },
+  "rev_18": {
+   "id": "rev_18",
+   "memoryId": "m2",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Two",
+    "content": "two draft 2",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_17",
+   "commitId": "commit_22",
+   "createdAt": "2026-02-01T00:00:21.000Z",
+   "author": "alice"
+  },
+  "rev_19": {
+   "id": "rev_19",
+   "memoryId": "m3",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Three",
+    "content": "three other",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": true,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_16",
+   "commitId": "commit_22",
+   "createdAt": "2026-02-01T00:00:22.000Z",
+   "author": "alice"
+  },
+  "rev_20": {
+   "id": "rev_20",
+   "memoryId": "m1",
+   "branchId": "main",
+   "snapshot": {
+    "title": "One",
+    "content": "temp",
+    "type": "fact",
+    "tags": [],
+    "collectionId": "col_a",
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_11",
+   "commitId": null,
+   "createdAt": "2026-02-01T00:00:23.000Z",
+   "author": "alice"
+  },
+  "rev_21": {
+   "id": "rev_21",
+   "memoryId": "m1",
+   "branchId": "main",
+   "snapshot": {
+    "title": "One",
+    "content": "a\nB-main\nc",
+    "type": "fact",
+    "tags": [],
+    "collectionId": "col_a",
+    "archived": false,
+    "metadata": {}
+   },
+   "parentRevisionId": "rev_20",
+   "commitId": null,
+   "createdAt": "2026-02-01T00:00:24.000Z",
+   "author": "alice"
+  }
+ },
+ "commits": {
+  "commit_4": {
+   "id": "commit_4",
+   "branchId": "main",
+   "parentIds": [],
+   "message": "initial",
+   "author": "alice",
+   "timestamp": "2026-02-01T00:00:07.000Z",
+   "changes": [
+    {
+     "memoryId": "m1",
+     "revisionId": "rev_1",
+     "kind": "create"
+    },
+    {
+     "memoryId": "m2",
+     "revisionId": "rev_2",
+     "kind": "create"
+    },
+    {
+     "memoryId": "m3",
+     "revisionId": "rev_3",
+     "kind": "create"
+    }
+   ]
+  },
+  "commit_9": {
+   "id": "commit_9",
+   "branchId": "feat",
+   "parentIds": [
+    "commit_4"
+   ],
+   "message": "feature work",
+   "author": "alice",
+   "timestamp": "2026-02-01T00:00:13.000Z",
+   "changes": [
+    {
+     "memoryId": "m1",
+     "revisionId": "rev_6",
+     "kind": "update"
+    },
+    {
+     "memoryId": "m2",
+     "revisionId": "rev_7",
+     "kind": "update"
+    },
+    {
+     "memoryId": "m4",
+     "revisionId": "rev_8",
+     "kind": "create"
+    }
+   ]
+  },
+  "commit_12": {
+   "id": "commit_12",
+   "branchId": "main",
+   "parentIds": [
+    "commit_4"
+   ],
+   "message": "main edit",
+   "author": "alice",
+   "timestamp": "2026-02-01T00:00:16.000Z",
+   "changes": [
+    {
+     "memoryId": "m1",
+     "revisionId": "rev_11",
+     "kind": "update"
+    }
+   ]
+  },
+  "commit_14": {
+   "id": "commit_14",
+   "branchId": "other",
+   "parentIds": [
+    "commit_12"
+   ],
+   "message": "other work",
+   "author": "alice",
+   "timestamp": "2026-02-01T00:00:18.000Z",
+   "changes": [
+    {
+     "memoryId": "m3",
+     "revisionId": "rev_13",
+     "kind": "update"
+    }
+   ]
+  },
+  "commit_15": {
+   "id": "commit_15",
+   "branchId": "main",
+   "parentIds": [
+    "commit_12",
+    "commit_14"
+   ],
+   "message": "Integrate other into main",
+   "author": "alice",
+   "timestamp": "2026-02-01T00:00:19.000Z",
+   "changes": [
+    {
+     "memoryId": "m3",
+     "revisionId": "rev_16",
+     "kind": "update"
+    }
+   ]
+  },
+  "commit_22": {
+   "id": "commit_22",
+   "branchId": "main",
+   "parentIds": [
+    "commit_15"
+   ],
+   "message": "save drafts",
+   "author": "alice",
+   "timestamp": "2026-02-01T00:00:25.000Z",
+   "changes": [
+    {
+     "memoryId": "m2",
+     "revisionId": "rev_18",
+     "kind": "update"
+    },
+    {
+     "memoryId": "m3",
+     "revisionId": "rev_19",
+     "kind": "archive"
+    }
+   ]
+  }
+ },
+ "branches": {
+  "main": {
+   "id": "main",
+   "name": "main",
+   "headCommitId": "commit_22",
+   "baseCommitId": null
+  },
+  "feat": {
+   "id": "feat",
+   "name": "feature/x",
+   "headCommitId": "commit_9",
+   "baseCommitId": "commit_4"
+  },
+  "other": {
+   "id": "other",
+   "name": "other",
+   "headCommitId": "commit_14",
+   "baseCommitId": "commit_12"
+  }
+ },
+ "relations": {
+  "rel_5": {
+   "id": "rel_5",
+   "fromId": "m1",
+   "toId": "m2",
+   "label": "rel",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "alice"
+   },
+   "createdAt": "2026-02-01T00:00:08.000Z"
+  }
+ },
+ "collections": {
+  "col_a": {
+   "id": "col_a",
+   "name": "Alpha",
+   "description": "",
+   "createdAt": "2026-02-01T00:00:00.000Z"
+  }
+ },
+ "pendingMerge": {
+  "sourceBranchId": "feat",
+  "targetBranchId": "main",
+  "baseCommitId": "commit_4",
+  "message": "Integrate feature/x into main",
+  "author": "alice",
+  "merged": {
+   "m1": {
+    "title": "One",
+    "content": "a\nB-main\nc",
+    "type": "fact",
+    "tags": [],
+    "collectionId": "col_a",
+    "archived": false,
+    "metadata": {}
+   },
+   "m2": {
+    "title": "Two (feat)",
+    "content": "two draft 2",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   },
+   "m3": {
+    "title": "Three",
+    "content": "three other",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": true,
+    "metadata": {}
+   },
+   "m4": {
+    "title": "Four",
+    "content": "four",
+    "type": "fact",
+    "tags": [],
+    "collectionId": null,
+    "archived": false,
+    "metadata": {}
+   }
+  },
+  "conflicts": [
+   {
+    "field": "content",
+    "base": "a\nb\nc",
+    "ours": "a\nB-main\nc",
+    "theirs": "a\nB-feature\nc",
+    "id": "conflict_23",
+    "memoryId": "m1",
+    "resolution": null
+   }
+  ]
+ }
+}

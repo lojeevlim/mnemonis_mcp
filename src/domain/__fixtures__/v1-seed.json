@@ -1,0 +1,1064 @@
+{
+ "schemaVersion": 1,
+ "currentBranchId": "main",
+ "memories": {
+  "mem_profile": {
+   "id": "mem_profile",
+   "createdAt": "2026-09-01T12:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_pref_dark": {
+   "id": "mem_pref_dark",
+   "createdAt": "2026-09-01T14:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_pref_writing": {
+   "id": "mem_pref_writing",
+   "createdAt": "2026-09-01T16:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_proj_mnemonis": {
+   "id": "mem_proj_mnemonis",
+   "createdAt": "2026-09-01T18:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_dec_local_first": {
+   "id": "mem_dec_local_first",
+   "createdAt": "2026-09-01T20:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_dec_zustand": {
+   "id": "mem_dec_zustand",
+   "createdAt": "2026-09-01T22:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_dec_custom_graph": {
+   "id": "mem_dec_custom_graph",
+   "createdAt": "2026-09-02T00:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_fact_mcp": {
+   "id": "mem_fact_mcp",
+   "createdAt": "2026-09-02T03:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_fact_lojee": {
+   "id": "mem_fact_lojee",
+   "createdAt": "2026-09-02T05:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_research_memory": {
+   "id": "mem_research_memory",
+   "createdAt": "2026-09-02T07:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_research_graph": {
+   "id": "mem_research_graph",
+   "createdAt": "2026-09-02T09:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_proc_release": {
+   "id": "mem_proc_release",
+   "createdAt": "2026-09-02T11:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_proc_review": {
+   "id": "mem_proc_review",
+   "createdAt": "2026-09-02T13:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_meeting_kickoff": {
+   "id": "mem_meeting_kickoff",
+   "createdAt": "2026-09-02T15:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_meeting_design": {
+   "id": "mem_meeting_design",
+   "createdAt": "2026-09-02T17:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_task_seed": {
+   "id": "mem_task_seed",
+   "createdAt": "2026-09-02T19:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_task_mcp": {
+   "id": "mem_task_mcp",
+   "createdAt": "2026-09-02T21:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_ref_textile": {
+   "id": "mem_ref_textile",
+   "createdAt": "2026-09-02T23:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  },
+  "mem_research_ranking": {
+   "id": "mem_research_ranking",
+   "createdAt": "2026-09-03T22:00:00.000Z",
+   "source": "demo-seed",
+   "provenance": {
+    "origin": "demo",
+    "createdBy": "Mnemonis Demo"
+   }
+  }
+ },
+ "revisions": {
+  "rev_1": {
+   "id": "rev_1",
+   "memoryId": "mem_profile",
+   "branchId": "main",
+   "snapshot": {
+    "title": "About me",
+    "content": "# About me\n\nFull-stack engineer building tools for thought. Works across **TypeScript**, Python and Postgres.",
+    "type": "personal_context",
+    "tags": [
+     "profile",
+     "Demo"
+    ],
+    "collectionId": "col_personal",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_8",
+   "createdAt": "2026-09-01T13:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_2": {
+   "id": "rev_2",
+   "memoryId": "mem_pref_dark",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Prefers dark, calm interfaces",
+    "content": "Dark-first themes, restrained single accent colour, compact density.",
+    "type": "preference",
+    "tags": [
+     "ui",
+     "Demo"
+    ],
+    "collectionId": "col_personal",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_8",
+   "createdAt": "2026-09-01T15:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_3": {
+   "id": "rev_3",
+   "memoryId": "mem_pref_writing",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Writing style preferences",
+    "content": "- Short sentences\n- Lead with the conclusion\n- Avoid jargon unless defined",
+    "type": "preference",
+    "tags": [
+     "writing",
+     "Demo"
+    ],
+    "collectionId": "col_personal",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_8",
+   "createdAt": "2026-09-01T17:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_4": {
+   "id": "rev_4",
+   "memoryId": "mem_proj_mnemonis",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Project: Mnemonis",
+    "content": "# Mnemonis\n\nA cross-model second brain: memories, versioning, a knowledge graph and an MCP server.\n\n## Status\nFrontend prototype in progress.",
+    "type": "project",
+    "tags": [
+     "mnemonis",
+     "roadmap",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_8",
+   "createdAt": "2026-09-01T19:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_5": {
+   "id": "rev_5",
+   "memoryId": "mem_dec_local_first",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Decision: local-first data layer for the prototype",
+    "content": "The frontend ships with a `MemoryRepository` interface and a localStorage implementation.\n\nA backend can replace it without touching the domain logic.",
+    "type": "technical_decision",
+    "tags": [
+     "architecture",
+     "storage",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_8",
+   "createdAt": "2026-09-01T21:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_6": {
+   "id": "rev_6",
+   "memoryId": "mem_dec_zustand",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Decision: Zustand for client state",
+    "content": "Zustand keeps stores thin; all rules live in the pure domain layer.",
+    "type": "technical_decision",
+    "tags": [
+     "architecture",
+     "frontend",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_8",
+   "createdAt": "2026-09-01T23:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_7": {
+   "id": "rev_7",
+   "memoryId": "mem_dec_custom_graph",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Decision: custom graph renderer",
+    "content": "Draw the knowledge graph with a small in-house force simulation and SVG.\n\nNo graph library dependency.",
+    "type": "technical_decision",
+    "tags": [
+     "graph",
+     "frontend",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_8",
+   "createdAt": "2026-09-02T01:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_9": {
+   "id": "rev_9",
+   "memoryId": "mem_fact_mcp",
+   "branchId": "main",
+   "snapshot": {
+    "title": "MCP lets agents call tools over a standard protocol",
+    "content": "Model Context Protocol servers expose tools and resources to clients such as Claude Code.",
+    "type": "fact",
+    "tags": [
+     "mcp",
+     "agents",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T04:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_10": {
+   "id": "rev_10",
+   "memoryId": "mem_fact_lojee",
+   "branchId": "main",
+   "snapshot": {
+    "title": "lojee-ui is pinned to an exact alpha version",
+    "content": "Alpha releases may change props; read the type definitions before using a component.",
+    "type": "fact",
+    "tags": [
+     "frontend",
+     "dependencies",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T06:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_11": {
+   "id": "rev_11",
+   "memoryId": "mem_research_memory",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Research: agent memory systems",
+    "content": "## Findings\n\n1. Flat vector stores lose structure.\n2. Explicit relations improve recall.\n3. Human review prevents memory pollution.",
+    "type": "research",
+    "tags": [
+     "research",
+     "memory",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T08:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_12": {
+   "id": "rev_12",
+   "memoryId": "mem_research_graph",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Research: force-directed layout basics",
+    "content": "Repulsion between all nodes, spring attraction along edges, a weak centering force and velocity damping.",
+    "type": "research",
+    "tags": [
+     "graph",
+     "research",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T10:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_13": {
+   "id": "rev_13",
+   "memoryId": "mem_proc_release",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Procedure: cut a release",
+    "content": "1. Run typecheck, lint, tests\n2. Build\n3. Tag the release\n4. Write release notes",
+    "type": "procedure",
+    "tags": [
+     "process",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T12:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_14": {
+   "id": "rev_14",
+   "memoryId": "mem_proc_review",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Procedure: review a proposed memory change",
+    "content": "Open the diff, check provenance, then save a version with a clear note or discard the draft.",
+    "type": "procedure",
+    "tags": [
+     "process",
+     "review",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T14:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_15": {
+   "id": "rev_15",
+   "memoryId": "mem_meeting_kickoff",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Meeting: Mnemonis kickoff",
+    "content": "**Attendees:** product, engineering\n\n- Frontend first, backend later\n- Drafts are never auto-saved to memory",
+    "type": "meeting_note",
+    "tags": [
+     "meeting",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T16:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_16": {
+   "id": "rev_16",
+   "memoryId": "mem_meeting_design",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Meeting: design review",
+    "content": "Agreed on dark-first theme and a compact table layout for memories.",
+    "type": "meeting_note",
+    "tags": [
+     "meeting",
+     "design",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T18:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_17": {
+   "id": "rev_17",
+   "memoryId": "mem_task_seed",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Task: write demo seed data",
+    "content": "- [ ] Realistic memories\n- [ ] Relations incl. isolated nodes\n- [ ] One memory line with drafts",
+    "type": "task",
+    "tags": [
+     "todo",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T20:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_18": {
+   "id": "rev_18",
+   "memoryId": "mem_task_mcp",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Task: design MCP tool surface",
+    "content": "Search, read, propose draft. Agents must never save versions directly.",
+    "type": "task",
+    "tags": [
+     "todo",
+     "mcp",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-02T22:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_19": {
+   "id": "rev_19",
+   "memoryId": "mem_ref_textile",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Reference: Textile syntax cheatsheet",
+    "content": "`h1.` heading, `*bold*`, `_italic_`, `bc.` code block.",
+    "type": "reference",
+    "tags": [
+     "docs",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": "commit_20",
+   "createdAt": "2026-09-03T00:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_21": {
+   "id": "rev_21",
+   "memoryId": "mem_proj_mnemonis",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Project: Mnemonis",
+    "content": "# Mnemonis\n\nA cross-model second brain: memories, versioning, a knowledge graph and an MCP server.\n\n## Status\nFrontend prototype built; backend and MCP server are next.",
+    "type": "project",
+    "tags": [
+     "mnemonis",
+     "roadmap",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": "rev_4",
+   "commitId": "commit_23",
+   "createdAt": "2026-09-03T02:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_22": {
+   "id": "rev_22",
+   "memoryId": "mem_task_seed",
+   "branchId": "main",
+   "snapshot": {
+    "title": "Task: write demo seed data",
+    "content": "- [x] Realistic memories\n- [x] Relations incl. isolated nodes\n- [x] One memory line with drafts",
+    "type": "task",
+    "tags": [
+     "todo",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": "rev_17",
+   "commitId": "commit_23",
+   "createdAt": "2026-09-03T03:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_40": {
+   "id": "rev_40",
+   "memoryId": "mem_dec_custom_graph",
+   "branchId": "experiment-ranking",
+   "snapshot": {
+    "title": "Decision: custom graph renderer",
+    "content": "Draw the knowledge graph with a small in-house force simulation and SVG.\n\nNo graph library dependency.\n\nUpdate: add Barnes-Hut approximation if node count exceeds 500.",
+    "type": "technical_decision",
+    "tags": [
+     "graph",
+     "frontend",
+     "Demo"
+    ],
+    "collectionId": "col_engineering",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": "rev_7",
+   "commitId": null,
+   "createdAt": "2026-09-03T21:00:00.000Z",
+   "author": "Mnemonis Demo"
+  },
+  "rev_41": {
+   "id": "rev_41",
+   "memoryId": "mem_research_ranking",
+   "branchId": "experiment-ranking",
+   "snapshot": {
+    "title": "Research: search ranking signals",
+    "content": "Exact id and title matches should outrank body matches; recency breaks ties.",
+    "type": "research",
+    "tags": [
+     "research",
+     "search",
+     "Demo"
+    ],
+    "collectionId": "col_product",
+    "archived": false,
+    "metadata": {
+     "demo": true
+    }
+   },
+   "parentRevisionId": null,
+   "commitId": null,
+   "createdAt": "2026-09-03T23:00:00.000Z",
+   "author": "Mnemonis Demo"
+  }
+ },
+ "commits": {
+  "commit_8": {
+   "id": "commit_8",
+   "branchId": "main",
+   "parentIds": [],
+   "message": "Add profile, project and core decisions",
+   "author": "Mnemonis Demo",
+   "timestamp": "2026-09-02T02:00:00.000Z",
+   "changes": [
+    {
+     "memoryId": "mem_profile",
+     "revisionId": "rev_1",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_pref_dark",
+     "revisionId": "rev_2",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_pref_writing",
+     "revisionId": "rev_3",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_proj_mnemonis",
+     "revisionId": "rev_4",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_dec_local_first",
+     "revisionId": "rev_5",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_dec_zustand",
+     "revisionId": "rev_6",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_dec_custom_graph",
+     "revisionId": "rev_7",
+     "kind": "create"
+    }
+   ]
+  },
+  "commit_20": {
+   "id": "commit_20",
+   "branchId": "main",
+   "parentIds": [
+    "commit_8"
+   ],
+   "message": "Add research, procedures, meetings and tasks",
+   "author": "Mnemonis Demo",
+   "timestamp": "2026-09-03T01:00:00.000Z",
+   "changes": [
+    {
+     "memoryId": "mem_fact_mcp",
+     "revisionId": "rev_9",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_fact_lojee",
+     "revisionId": "rev_10",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_research_memory",
+     "revisionId": "rev_11",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_research_graph",
+     "revisionId": "rev_12",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_proc_release",
+     "revisionId": "rev_13",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_proc_review",
+     "revisionId": "rev_14",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_meeting_kickoff",
+     "revisionId": "rev_15",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_meeting_design",
+     "revisionId": "rev_16",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_task_seed",
+     "revisionId": "rev_17",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_task_mcp",
+     "revisionId": "rev_18",
+     "kind": "create"
+    },
+    {
+     "memoryId": "mem_ref_textile",
+     "revisionId": "rev_19",
+     "kind": "create"
+    }
+   ]
+  },
+  "commit_23": {
+   "id": "commit_23",
+   "branchId": "main",
+   "parentIds": [
+    "commit_20"
+   ],
+   "message": "Update project status and seed task",
+   "author": "Mnemonis Demo",
+   "timestamp": "2026-09-03T04:00:00.000Z",
+   "changes": [
+    {
+     "memoryId": "mem_proj_mnemonis",
+     "revisionId": "rev_21",
+     "kind": "update"
+    },
+    {
+     "memoryId": "mem_task_seed",
+     "revisionId": "rev_22",
+     "kind": "update"
+    }
+   ]
+  }
+ },
+ "branches": {
+  "main": {
+   "id": "main",
+   "name": "main",
+   "headCommitId": "commit_23",
+   "baseCommitId": null
+  },
+  "experiment-ranking": {
+   "id": "experiment-ranking",
+   "name": "experiment/ranking",
+   "headCommitId": "commit_23",
+   "baseCommitId": "commit_23"
+  }
+ },
+ "relations": {
+  "rel_24": {
+   "id": "rel_24",
+   "fromId": "mem_proj_mnemonis",
+   "toId": "mem_dec_local_first",
+   "label": "decided",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T05:00:00.000Z"
+  },
+  "rel_25": {
+   "id": "rel_25",
+   "fromId": "mem_proj_mnemonis",
+   "toId": "mem_dec_zustand",
+   "label": "decided",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T06:00:00.000Z"
+  },
+  "rel_26": {
+   "id": "rel_26",
+   "fromId": "mem_proj_mnemonis",
+   "toId": "mem_dec_custom_graph",
+   "label": "decided",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T07:00:00.000Z"
+  },
+  "rel_27": {
+   "id": "rel_27",
+   "fromId": "mem_proj_mnemonis",
+   "toId": "mem_task_seed",
+   "label": "has task",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T08:00:00.000Z"
+  },
+  "rel_28": {
+   "id": "rel_28",
+   "fromId": "mem_proj_mnemonis",
+   "toId": "mem_task_mcp",
+   "label": "has task",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T09:00:00.000Z"
+  },
+  "rel_29": {
+   "id": "rel_29",
+   "fromId": "mem_proj_mnemonis",
+   "toId": "mem_meeting_kickoff",
+   "label": "discussed in",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T10:00:00.000Z"
+  },
+  "rel_30": {
+   "id": "rel_30",
+   "fromId": "mem_meeting_kickoff",
+   "toId": "mem_meeting_design",
+   "label": "followed by",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T11:00:00.000Z"
+  },
+  "rel_31": {
+   "id": "rel_31",
+   "fromId": "mem_dec_custom_graph",
+   "toId": "mem_research_graph",
+   "label": "based on",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T12:00:00.000Z"
+  },
+  "rel_32": {
+   "id": "rel_32",
+   "fromId": "mem_task_mcp",
+   "toId": "mem_fact_mcp",
+   "label": "relies on",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T13:00:00.000Z"
+  },
+  "rel_33": {
+   "id": "rel_33",
+   "fromId": "mem_proj_mnemonis",
+   "toId": "mem_research_memory",
+   "label": "informed by",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T14:00:00.000Z"
+  },
+  "rel_34": {
+   "id": "rel_34",
+   "fromId": "mem_proc_review",
+   "toId": "mem_research_memory",
+   "label": "derived from",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T15:00:00.000Z"
+  },
+  "rel_35": {
+   "id": "rel_35",
+   "fromId": "mem_meeting_design",
+   "toId": "mem_pref_dark",
+   "label": "reflects",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T16:00:00.000Z"
+  },
+  "rel_36": {
+   "id": "rel_36",
+   "fromId": "mem_dec_zustand",
+   "toId": "mem_fact_lojee",
+   "label": "related",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T17:00:00.000Z"
+  },
+  "rel_37": {
+   "id": "rel_37",
+   "fromId": "mem_proc_release",
+   "toId": "mem_proc_review",
+   "label": "related",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T18:00:00.000Z"
+  },
+  "rel_38": {
+   "id": "rel_38",
+   "fromId": "mem_task_seed",
+   "toId": "mem_dec_local_first",
+   "label": "implements",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T19:00:00.000Z"
+  },
+  "rel_39": {
+   "id": "rel_39",
+   "fromId": "mem_ref_textile",
+   "toId": "mem_proc_release",
+   "label": "used by",
+   "provenance": {
+    "origin": "user",
+    "createdBy": "Mnemonis Demo",
+    "demo": true
+   },
+   "createdAt": "2026-09-03T20:00:00.000Z"
+  }
+ },
+ "collections": {
+  "col_product": {
+   "id": "col_product",
+   "name": "Mnemonis Product",
+   "description": "Product direction, meetings and tasks",
+   "createdAt": "2026-09-01T09:00:00.000Z"
+  },
+  "col_engineering": {
+   "id": "col_engineering",
+   "name": "Engineering",
+   "description": "Decisions, facts and procedures",
+   "createdAt": "2026-09-01T10:00:00.000Z"
+  },
+  "col_personal": {
+   "id": "col_personal",
+   "name": "Personal",
+   "description": "Profile and preferences",
+   "createdAt": "2026-09-01T11:00:00.000Z"
+  }
+ },
+ "pendingMerge": null
+}
