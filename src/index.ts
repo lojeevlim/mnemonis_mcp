@@ -1,9 +1,10 @@
-import { ConfigError, parseConfig } from "./config.js";
+import { ConfigError, parseConfig, proxyWarnings } from "./config.js";
 import { startAdapter } from "./mcp/server.js";
 
 async function main(): Promise<void> {
   const config = parseConfig();
   const running = await startAdapter({ config });
+  for (const w of proxyWarnings(config)) console.warn(`  WARNING: ${w}`);
   console.log(`Mnemonis MCP adapter listening on http://${config.host}:${running.port}/mcp`);
   console.log(`  forwarding to the Mnemonis API at ${config.apiUrl} (no database, no secrets)`);
   console.log(`  claude mcp add --transport http mnemonis http://localhost:${running.port}/mcp --header "Authorization: Bearer mn_..."`);

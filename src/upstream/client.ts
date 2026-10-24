@@ -46,6 +46,8 @@ export interface UpstreamOptions {
   writeTimeoutMs: number;
   connectTimeoutMs?: number;
   maxResponseBytes?: number;
+  /** MNEMONIS_ADAPTER_SECRET: sent on every upstream call as X-Mnemonis-Adapter-Secret (never logged). */
+  adapterSecret?: string | null;
   /** Delay before the single retry of a read (default 50-200 ms of jitter). */
   retryDelayMs?: () => number;
 }
@@ -84,6 +86,7 @@ export function createUpstream(opts: UpstreamOptions): Upstream {
       };
       if (h.authorization !== undefined) headers.Authorization = h.authorization;
       if (h.client) headers["X-Mnemonis-Client"] = h.client;
+      if (opts.adapterSecret) headers["X-Mnemonis-Adapter-Secret"] = opts.adapterSecret;
       if (h.forwardedFor) headers["X-Forwarded-For"] = h.forwardedFor;
       if (req.body !== undefined) {
         headers["Content-Type"] = "application/json";

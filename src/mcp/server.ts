@@ -55,8 +55,9 @@ interface RequestCtx {
   tooMany: number | null;
 }
 
+/** `notice` always comes first and is always the adapter's: an upstream field of that name can neither replace nor precede it. */
 const toolJson = (data: Record<string, unknown>, isError = false): CallToolResult => ({
-  content: [{ type: "text", text: JSON.stringify({ notice: UNTRUSTED_NOTICE, ...data }) }],
+  content: [{ type: "text", text: JSON.stringify({ notice: UNTRUSTED_NOTICE, ...Object.fromEntries(Object.entries(data).filter(([k]) => k !== "notice")) }) }],
   ...(isError ? { isError: true } : {}),
 });
 
@@ -83,7 +84,7 @@ export function createAdapter(opts: AdapterOptions): Adapter {
   const { config } = opts;
   const log = opts.log ?? ((l: string) => console.error(l));
   const upstream =
-    opts.upstream ?? createUpstream({ apiUrl: config.apiUrl, readTimeoutMs: config.readTimeoutMs, writeTimeoutMs: config.writeTimeoutMs });
+    opts.upstream ?? createUpstream({ apiUrl: config.apiUrl, readTimeoutMs: config.readTimeoutMs, writeTimeoutMs: config.writeTimeoutMs, adapterSecret: config.adapterSecret });
   const failures = opts.failureLimiter ?? createFailureLimiter();
   const names = createClientNames();
   const contract = opts.watchContract === false ? null : watchContract(upstream, { log });
@@ -170,7 +171,11 @@ export function createAdapter(opts: AdapterOptions): Adapter {
     } catch {
       parseFailed = true;
     }
-    const messages = parseFailed ? [] : Array.isArray(body) ? body : [body];
+    // One JSON-RPC message per HTTP request: a batch would multiply upstream calls (and failures) behind a single request.
+    if (!parseFailed && Array.isArray(body)) {
+      return c.json({ jsonrpc: "2.0", error: { code: -32600, message: "batch requests are not supported" }, id: null }, 400);
+    }
+    const messages = parseFailed ? [] : [body];
 
     const token = bearerValue(authorization);
     const announced = sanitizeClientName(initializeName(messages));

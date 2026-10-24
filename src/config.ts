@@ -9,6 +9,8 @@ export interface AdapterConfig {
   allowedHosts: string[];
   allowedOrigins: string[];
   trustProxy: boolean;
+  /** MNEMONIS_ADAPTER_SECRET shared with the API (sent as X-Mnemonis-Adapter-Secret so the API honours our X-Forwarded-For), or null. */
+  adapterSecret: string | null;
   readTimeoutMs: number;
   writeTimeoutMs: number;
   maxBodyBytes: number;
@@ -55,6 +57,7 @@ const schema = z.object({
   MNEMONIS_ALLOWED_HOSTS: z.preprocess(empty, z.string().optional()),
   MNEMONIS_ALLOWED_ORIGINS: z.preprocess(empty, z.string().optional()),
   MNEMONIS_TRUST_PROXY: z.preprocess(empty, bool.default("false")),
+  MNEMONIS_ADAPTER_SECRET: z.preprocess(empty, z.string().optional()),
   MNEMONIS_UPSTREAM_READ_TIMEOUT_MS: num(100, 120_000, 10_000),
   MNEMONIS_UPSTREAM_WRITE_TIMEOUT_MS: num(100, 120_000, 20_000),
   MNEMONIS_MAX_BODY_BYTES: num(1024, 64 * 1024 * 1024, 1024 * 1024),
@@ -84,6 +87,9 @@ export function parseConfig(env: Record<string, string | undefined> = process.en
       "MNEMONIS_API_URL must be https (or http on localhost; http on a private network needs MNEMONIS_API_ALLOW_INSECURE_PRIVATE=true) without credentials, query or fragment",
     );
   }
+  if (e.MNEMONIS_ADAPTER_SECRET !== undefined && !/^[\x21-\x7e]{16,256}$/.test(e.MNEMONIS_ADAPTER_SECRET)) {
+    problems.push("MNEMONIS_ADAPTER_SECRET must be 16-256 printable ASCII characters without spaces");
+  }
   if (problems.length > 0) throw new ConfigError(problems);
   return {
     apiUrl: e.MNEMONIS_API_URL.replace(/\/+$/, ""),
@@ -92,8 +98,19 @@ export function parseConfig(env: Record<string, string | undefined> = process.en
     allowedHosts: list(e.MNEMONIS_ALLOWED_HOSTS).map((s) => s.toLowerCase()),
     allowedOrigins: list(e.MNEMONIS_ALLOWED_ORIGINS).map((s) => s.replace(/\/+$/, "")),
     trustProxy: isTrue(e.MNEMONIS_TRUST_PROXY),
+    adapterSecret: e.MNEMONIS_ADAPTER_SECRET ?? null,
     readTimeoutMs: e.MNEMONIS_UPSTREAM_READ_TIMEOUT_MS,
     writeTimeoutMs: e.MNEMONIS_UPSTREAM_WRITE_TIMEOUT_MS,
     maxBodyBytes: e.MNEMONIS_MAX_BODY_BYTES,
   };
+}
+
+/** Startup warnings for the proxy setting (never fatal; same text as the API). Empty when MCP_HOST is loopback. */
+export function proxyWarnings(cfg: Pick<AdapterConfig, "host" | "trustProxy">): string[] {
+  if (isLoopbackHost(cfg.host)) return [];
+  return cfg.trustProxy
+    ? ["MNEMONIS_TRUST_PROXY is on: X-Forwarded-For is trusted for the failed-auth limiter, so the adapter must be reachable ONLY through your proxy."]
+    : [
+        `HOST ${cfg.host} is not loopback and MNEMONIS_TRUST_PROXY is unset: behind a reverse proxy EVERY client shares one login/failed-auth limiter bucket (the proxy's address), so one client can lock out all others. Set MNEMONIS_TRUST_PROXY=true if (and only if) your proxy sets X-Forwarded-For.`,
+      ];
 }

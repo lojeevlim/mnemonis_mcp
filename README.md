@@ -43,7 +43,7 @@ Then in the web app register, open **MCP Connections**, create a token (shown on
 claude mcp add --transport http mnemonis http://localhost:8788/mcp --header "Authorization: Bearer mn_..."
 ```
 
-See [docs/claude-code-setup.md](docs/claude-code-setup.md) and the optional [subagent](docs/mnemonis-subagent.md). For the API's `/api/auth/config` to show the right URL, its `MNEMONIS_MCP_URL` must be the URL clients use to reach this adapter (default `http://localhost:8788/mcp`). If the adapter reaches the API under a name other than loopback (for example `api:8787`), the API's `MNEMONIS_ALLOWED_HOSTS` must include that `host:port`.
+See [docs/claude-code-setup.md](docs/claude-code-setup.md) and the optional [subagent](docs/mnemonis-subagent.md). For the API's `/api/auth/config` to show the right URL, its `MNEMONIS_MCP_URL` (the design doc calls it `MNEMONIS_PUBLIC_MCP_URL`; the API accepts both, `MNEMONIS_MCP_URL` wins) must be the URL clients use to reach this adapter (default `http://localhost:8788/mcp`). If the adapter reaches the API under a name other than loopback (for example `api:8787`), the API's `MNEMONIS_ALLOWED_HOSTS` must include that `host:port`.
 
 ## Environment variables
 
@@ -57,7 +57,8 @@ No `DATABASE_URL`, no keys. Copy `.env.example` to `.env` (loaded by `npm run de
 | `MCP_PORT` | `8788` | Listen port (`0` = ephemeral) |
 | `MNEMONIS_ALLOWED_HOSTS` | none | Extra exact `Host` values accepted besides loopback with the port (DNS-rebinding defence) |
 | `MNEMONIS_ALLOWED_ORIGINS` | none | MCP clients send no `Origin`; any `Origin` not listed is refused with 403. CORS headers are never sent |
-| `MNEMONIS_TRUST_PROXY` | `false` | Use the LAST `X-Forwarded-For` entry (a valid IP) as the client address (failed-auth limiter, forwarded to the API). Only behind a trusted proxy that is the sole way in |
+| `MNEMONIS_TRUST_PROXY` | `false` | With a non-loopback `MCP_HOST` and this unset the adapter prints the same loud startup warning as the API (behind a proxy every client shares one limiter bucket; it does not fail). Use the LAST `X-Forwarded-For` entry (a valid IP) as the client address (failed-auth limiter, forwarded to the API). Only behind a trusted proxy that is the sole way in |
+| `MNEMONIS_ADAPTER_SECRET` | none | Optional shared secret with the API (same value as the API's `MNEMONIS_ADAPTER_SECRET`; 16-256 printable ASCII characters, no spaces). Sent to the API as `X-Mnemonis-Adapter-Secret` on every call; when it matches, the API honours the `X-Forwarded-For` the adapter sends (the real MCP client's IP) on `/api/agent/*` only, so each client gets its own failed-auth bucket there instead of all clients sharing the adapter's address. Without it the API sees the adapter's address for everyone (one client's bad tokens can then lock out all others). Never logged. Keep the adapter-to-API hop private |
 | `MNEMONIS_UPSTREAM_READ_TIMEOUT_MS` | `10000` | Timeout of a read call to the API (connect timeout is fixed at 2 s) |
 | `MNEMONIS_UPSTREAM_WRITE_TIMEOUT_MS` | `20000` | Timeout of a write call (never retried) |
 | `MNEMONIS_MAX_BODY_BYTES` | `1048576` | Cap on a `/mcp` request body (413) |
@@ -72,10 +73,11 @@ Read: `memory_search`, `memory_read`, `memory_list`, `memory_related`, `memory_h
 
 ## How a request flows
 
+0. `/mcp` takes ONE JSON-RPC message per HTTP request: a batch array is refused with `400` / `-32600` "batch requests are not supported" (before any upstream call), so a single request can never multiply upstream calls or failures. At most one failure is counted per HTTP request, and a tool call stops at the first upstream `401`.
 1. Host and Origin checks, then the adapter's own failed-authentication limiter (per client address).
 2. The `Authorization` header must be a plausible `Bearer` value; validity is the API's decision.
 3. **Preflight**: every request that does not itself carry a valid tool call to the API (`initialize`, `tools/list`, notifications, invalid or unknown tool calls) first calls `GET /api/agent/ping` with the caller's header. Upstream `401` becomes HTTP `401` + `WWW-Authenticate: Bearer realm="mnemonis"` (a revoked token stops working on the very next request, with no cache); upstream `429 too_many_failed_attempts` is HTTP `429` + `Retry-After`; any other preflight failure is HTTP `503`. A forwarded `tools/call` uses its own upstream call as the check.
-4. Each tool call is one `POST /api/agent/memory/<tool>`. Forwarded headers are only `Authorization` (verbatim), `Content-Type`, `X-Mnemonis-Contract`, `X-Mnemonis-Client` (the MCP `clientInfo.name`, remembered per token hash, sanitised printable ASCII), `X-Request-Id` and `X-Forwarded-For` (a single resolved client IP). Everything else a client sent is dropped.
+4. Each tool call is one `POST /api/agent/memory/<tool>`. Forwarded headers are only `Authorization` (verbatim), `Content-Type`, `X-Mnemonis-Contract`, `X-Mnemonis-Client` (the MCP `clientInfo.name`, remembered per token hash, sanitised printable ASCII), `X-Request-Id` and `X-Forwarded-For` (a single resolved client IP) and, only when `MNEMONIS_ADAPTER_SECRET` is set, `X-Mnemonis-Adapter-Secret`. Everything else a client sent is dropped.
 5. Results: `200` becomes the tool's data behind the `notice`; `400/404/409/413/422` and `429 rate_limited|inbox_full` become tool errors (`isError`) with the API's code and a message clipped to 500 characters; `401` is HTTP 401; `403/426`/malformed responses become the tool error `internal` "Mnemonis server configuration problem" (logged with the request id); `5xx`/connect errors are `upstream_unavailable`; a write timeout is `upstream_timeout` ("may or may not have been recorded; call memory_status before retrying"). Reads and the preflight are retried once on connect errors / 502 / 503 / 504; writes are never retried. Redirects are an error and are never followed; upstream responses are capped at 5 MiB.
 6. Tokens, request bodies and API messages are never logged.
 
