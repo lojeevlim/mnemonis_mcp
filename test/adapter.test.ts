@@ -3,7 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createUpstream } from "../src/upstream/client.js";
 import { TOOL_NAMES } from "../src/mcp/schemas.js";
-import { UNTRUSTED_NOTICE } from "../src/mcp/tools.js";
+import { SERVER_INSTRUCTIONS, UNTRUSTED_NOTICE } from "../src/mcp/tools.js";
 import { createFailureLimiter } from "../src/http/guards.js";
 import { INIT_PARAMS, loadFixtures, MCP_HEADERS, replayFixtures, rpc, startAdapterFor, startFakeApi, TOKEN, type FakeApi } from "./fakeApi.js";
 
@@ -53,6 +53,26 @@ describe("tool surface", () => {
       expect(tools.find((t) => t.name === n)?.annotations?.readOnlyHint).toBe(false);
     }
     expect(tools.find((t) => t.name === "memory_search")?.annotations?.readOnlyHint).toBe(true);
+  });
+
+  it("documents the '<project>: <data>' auto 'part of' link and the project hub", async () => {
+    const c = await connect();
+    const { tools } = await c.listTools();
+    for (const text of [SERVER_INSTRUCTIONS, tools.find((t) => t.name === "memory_save")?.description ?? ""]) {
+      expect(text).toMatch(/part of/);
+      expect(text).toMatch(/do not add (it|that link)/i);
+      expect(text).toMatch(/exactly/);
+      expect(text).toMatch(/project hub/);
+    }
+    for (const text of [SERVER_INSTRUCTIONS, tools.find((t) => t.name === "memory_save")?.description ?? ""]) {
+      expect(text).toMatch(/shares topic/i);
+      expect(text).toMatch(/topic tag/i);
+      expect(text).toMatch(/do not add/i);
+    }
+    const desc = (n: string) => tools.find((t) => t.name === n)?.description ?? "";
+    expect(desc("memory_link")).toMatch(/that link is created for you/);
+    expect(desc("memory_link")).toMatch(/shares topic/i);
+    expect(desc("memory_related")).toMatch(/approved, saved links/i);
   });
 });
 
